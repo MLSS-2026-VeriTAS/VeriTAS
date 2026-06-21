@@ -1,5 +1,7 @@
 # VeriTAS
 
+![VeriTAS banner](docs/assets/banner.png)
+
 [![Python 3.10](https://img.shields.io/badge/Python-3.10-3776AB?style=flat-square&logo=python&logoColor=white)](https://docs.python.org/3.10/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 [![Status: Active Development](https://img.shields.io/badge/Status-Active%20Development-orange?style=flat-square)](#project-status)
