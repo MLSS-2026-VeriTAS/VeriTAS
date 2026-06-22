@@ -1,3 +1,5 @@
+openai
+
 # Core machine-learning dependencies inherited from MLRC-Bench
 torch>=2.0.0
 torchvision
