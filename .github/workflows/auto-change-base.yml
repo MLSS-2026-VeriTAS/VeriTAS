@@ -1,0 +1,20 @@
+name: Auto Change PR Base to Dev
+on:
+  pull_request:
+    types: [opened]
+
+jobs:
+  change-base:
+    if: github.base_ref == 'main' && github.head_ref != 'dev'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Change PR base from main to dev
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              base: 'dev'
+            });
