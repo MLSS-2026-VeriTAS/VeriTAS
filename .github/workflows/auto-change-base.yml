@@ -3,6 +3,11 @@ on:
   pull_request:
     types: [opened]
 
+# Add this explicit permissions block to bypass the greyed-out UI setting
+permissions:
+  pull-requests: write
+  contents: read
+
 jobs:
   change-base:
     if: github.base_ref == 'main' && github.head_ref != 'dev'
