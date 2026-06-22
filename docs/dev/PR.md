@@ -2,7 +2,7 @@
 
 1. Create PR
   - IF branch == dev: to main
-  - ELSE: to dev, gh action SHOULD automatically change it to dev if set to main from non-dev branch (see .github/workflows/auto-change-base.yml)
+  - ELSE: to dev, ~~gh action SHOULD automatically change it to dev if set to main from non-dev branch (see .github/workflows/auto-change-base.yml)~~
 
 2. Assign person
 
