@@ -1,0 +1,72 @@
+{
+  "perception_temporal_action_loc": {
+    "MLAB (claude-3-5-sonnet-v2)": 0.8,
+    "Top Human in Competition": 100.0,
+    "MLAB (gemini-exp-1206)": -0.5,
+    "MLAB (o3-mini)": 0.3,
+    "MLAB (gpt-4o)": 0.3,
+    "MLAB (llama3-1-405b-instruct)": 0.5,
+    "CoI-Agent (o1) + MLAB (gpt-4o)": 0.4,
+    "Human Idea + MLAB (gpt-4o)": 0.5
+  },
+  "llm-merging": {
+    "CoI-Agent (o1) + MLAB (gpt-4o)": -1.0,
+    "Top Human in Competition": 100.0,
+    "MLAB (claude-3-5-sonnet-v2)": 5.0,
+    "MLAB (gemini-exp-1206)": 5.0,
+    "MLAB (o3-mini)": -1.0,
+    "MLAB (gpt-4o)": 2.0,
+    "MLAB (llama3-1-405b-instruct)": -1.0,
+    "Human Idea + MLAB (gpt-4o)": -1.0
+  },
+  "product-recommendation": {
+    "MLAB (claude-3-5-sonnet-v2)": 3.0,
+    "Top Human in Competition": 100.0,
+    "MLAB (gemini-exp-1206)": 0.1,
+    "MLAB (o3-mini)": 0.1,
+    "MLAB (gpt-4o)": 0.6,
+    "MLAB (llama3-1-405b-instruct)": -0.0,
+    "Human Idea + MLAB (gpt-4o)": 2.2,
+    "CoI-Agent (o1) + MLAB (gpt-4o)": 0.1
+  },
+  "weather_forcast": {
+    "CoI-Agent (o1) + MLAB (gpt-4o)": 39.4,
+    "Top Human in Competition": 100.0,
+    "Human Idea + MLAB (gpt-4o)": 12.3,
+    "MLAB (claude-3-5-sonnet-v2)": 14.6,
+    "MLAB (gemini-exp-1206)": 43.1,
+    "MLAB (o3-mini)": 25.1,
+    "MLAB (gpt-4o)": 47.5,
+    "MLAB (llama3-1-405b-instruct)": 31.5
+  },
+  "meta-learning": {
+    "MLAB (claude-3-5-sonnet-v2)": -4.9,
+    "Top Human in Competition": 100.0,
+    "MLAB (gemini-exp-1206)": -1.1,
+    "MLAB (o3-mini)": -4.9,
+    "MLAB (gpt-4o)": -4.9,
+    "MLAB (llama3-1-405b-instruct)": -4.9,
+    "Human Idea + MLAB (gpt-4o)": -4.9,
+    "CoI-Agent (o1) + MLAB (gpt-4o)": -4.9
+  },
+  "machine_unlearning": {
+    "Human Idea + MLAB (gpt-4o)": 6.8,
+    "Top Human in Competition": 100.0,
+    "CoI-Agent (o1) + MLAB (gpt-4o)": 11.8,
+    "MLAB (claude-3-5-sonnet-v2)": -94.7,
+    "MLAB (gemini-exp-1206)": 5.6,
+    "MLAB (o3-mini)": 3.6,
+    "MLAB (gpt-4o)": -18.0,
+    "MLAB (llama3-1-405b-instruct)": 6.2
+  },
+  "backdoor-trigger-recovery": {
+    "CoI-Agent (o1) + MLAB (gpt-4o)": 4.0,
+    "Top Human in Competition": 100.0,
+    "MLAB (claude-3-5-sonnet-v2)": 39.9,
+    "MLAB (gemini-exp-1206)": 12.9,
+    "MLAB (o3-mini)": 6.2,
+    "MLAB (gpt-4o)": 10.4,
+    "MLAB (llama3-1-405b-instruct)": 11.5,
+    "Human Idea + MLAB (gpt-4o)": 8.8
+  }
+}
