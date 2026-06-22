@@ -1,6 +1,4 @@
-# VeriTAS
-
-![VeriTAS banner](docs/assets/banner.png)
+![VeriTAS](docs/assets/banner.png)
 
 [![Python 3.10](https://img.shields.io/badge/Python-3.10-3776AB?style=flat-square&logo=python&logoColor=white)](https://docs.python.org/3.10/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
@@ -51,39 +49,116 @@ VeriTAS is under active development. The commands below describe the intended pr
 - Credentials required by the selected model provider
 - For applicable tasks, Kaggle API credentials and acceptance of the competition rules
 
-## Creating a Python environment
+# Installation
 
-MLRC-Bench recommends Conda and Python 3.10. VeriTAS keeps that approach but uses a single environment and a single dependency file. From the repository root, run:
+0.0. If you are part of our hackathon team, you will need access to our virtual machine. Follow the steps [here](docs/dev/GOOGLE_CLOUD.md)
 
-```bash
-conda create --name veritas python=3.10 -y
-conda activate veritas
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
+0.1. Cloning Repos
+    1.1.0 Install this repo:
 
-The project-level [`requirements.txt`](requirements.txt) includes the shared MLRC-Bench dependencies as well as VeriTAS's testing and verification dependencies, so no second setup flow is needed.
+    ```bash
+    # https
+    git clone https://github.com/MLSS-2026-VeriTAS/VeriTAS.git
+    # ssh
+    git clone git@github.com:MLSS-2026-VeriTAS/VeriTAS.git
+    ```
 
-## Running the code
+    1.1.1 Install MLRC-Bench:
 
-Set the credentials required by the chosen model provider. For example, MLRC-Bench's OpenAI/Azure integration expects:
+    ```bash
+    # https
+    git clone https://github.com/yunx-z/MLRC-Bench 
+    # ssh
+    git clone git@github.com:yunx-z/MLRC-Bench.git 
+    ```
 
-```bash
-export MY_OPENAI_API_KEY=<api-key>
-export MY_AZURE_OPENAI_ENDPOINT=<azure-endpoint>
-```
+0.2. Create a Python environment
+
+    ```bash
+
+    conda create --name mlab python=3.10 -y # Name matters here
+    conda activate mlab
+
+    # Install MLRC Bench
+    cd MLRC-Bench
+    pip install -e .
+
+    # resolves install issues in original MLRC Bench
+    cd ../VeriTAS
+    bash install_fixed.sh
+    ```
+
+# SETUP
+
+1.0. (Optional) To run code in the background, a tmux session is recommended:
+
+    ```bash
+    # new session
+    tmux new -s veritas_session
+
+    # existing session
+    tmux a -t veritas_session
+    ```
+
+**NOTE:** Make sure to reactivate conda
+
+    ```bash
+    conda activate veritas
+    ```
+
+1.1. Set the credentials required by the chosen model provider. For example, MLRC-Bench's OpenAI/Azure integration expects:
+
+    ```bash
+    export MY_OPENAI_API_KEY=<api-key>
+    export MY_AZURE_OPENAI_ENDPOINT=<azure-endpoint>
+    ```
 
 > TODO: This key structure is an example and likely will need alteration.
 
-Then launch an MLRC-Bench task using its standard interface:
+# TASK-SPECIFIC SETUP
 
-```bash
-TASK_NAME=<task-name>
-MODEL=<model-name>
-GPU_ID=<gpu-id>
+2.0. Assign Environment Variables Expected by MLRC Bench
 
-bash launch.sh "${TASK_NAME}" "${MODEL}" "${GPU_ID}"
-```
+    ```bash
+    TASK_NAME=<task-name>
+    MODEL=<model-name> # SEE https://github.com/yunx-z/MLRC-Bench/blob/main/MLAgentBench/LLM.py#L13 for list of model string options
+    GPU_ID=<gpu-id> # 0
+    TASK_NAME=<arbitrary-label-for-tracking-current-run>
+    ```
+
+2.1. Create Task-Specific Env
+
+    ```bash
+    cd ../MLRC-Bench/MLAgentBench/benchmarks_base/${TASK_NAME}/scripts
+    conda env create -f environment.yml --name ${TASK_NAME} # name matters here
+    conda activate ${TASK_NAME}
+
+    # Install MLRC Bench
+    cd ../../../..
+    pip install -e .
+
+    # install fixed installation script
+    cd ../VeriTAS
+    bash install_fixed.sh
+    ```
+
+2.2. Initialize env
+
+    ```bash
+    cd ../MLRC-Bench
+    # Unsure why this is needed since it is not reflected in the MLRC docs
+    bash scripts/init_env.sh "${TASK_NAME}" "${MODEL}" "${GPU_ID}" "${TASK_NAME}"
+    ```
+
+2.3. Launch Task
+
+    ```bash
+    # run the code
+    bash launch.sh "${TASK_NAME}" "${MODEL}" "${GPU_ID}"
+    ```
+
+**NOTE:** Logs are output to a file, so you will need to copy the log directory that is output, exit tmux session (Ctrl-B, D), and view it (cat < LOG-DIR >)
+
 
 > TODO: Document the final configuration option or command-line flag used to enable and disable the Verifier.
 
