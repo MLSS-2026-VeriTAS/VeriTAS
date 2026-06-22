@@ -1,8 +1,0 @@
-data/*
-methods/BaseMethod.py
-evaluation.py
-main.py
-load_cifar_script.py
-forget_idx.npy
-retrain_weights_resnet18_cifar10.pth
-weights_resnet18_cifar10.pth

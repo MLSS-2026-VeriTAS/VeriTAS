@@ -1,4 +1,0 @@
-data/*
-evaluation.py
-main.py
-dev/*
