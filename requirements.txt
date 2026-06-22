@@ -1,6 +1,7 @@
 # Core machine-learning dependencies inherited from MLRC-Bench
 torch>=2.0.0
 torchvision
+torchaudio # Added from install.sh
 transformers
 scikit-learn
 xgboost
@@ -34,3 +35,5 @@ boto3
 
 # VeriTAS development and testing
 pytest
+
+torchaudio
