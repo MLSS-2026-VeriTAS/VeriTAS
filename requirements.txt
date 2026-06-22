@@ -1,0 +1,36 @@
+# Core machine-learning dependencies inherited from MLRC-Bench
+torch>=2.0.0
+torchvision
+transformers
+scikit-learn
+xgboost
+keras
+scipy
+numpy
+pandas
+matplotlib
+seaborn
+tqdm
+kaggle
+
+# LLM and language-processing dependencies inherited from MLRC-Bench
+openai
+anthropic
+langchain
+sentencepiece
+spacy
+nltk
+sacrebleu
+rouge-score
+peft
+accelerate
+evaluate
+vertexai
+
+# Supporting dependencies inherited from MLRC-Bench
+cchardet
+dacite
+boto3
+
+# VeriTAS development and testing
+pytest
