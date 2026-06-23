@@ -92,3 +92,19 @@ class CloudRunManifest:
     redacted_environment: dict[str, str] = field(default_factory=dict)
     notes: dict[str, Any] = field(default_factory=dict)
 
+
+@dataclass
+class FileDigest:
+    path: str
+    category: str
+    sha256: str
+
+
+@dataclass
+class ProtectedDigestManifest:
+    run_id: str
+    created_at: str
+    digest_algorithm: str
+    protected_sources: list[str]
+    files: list[FileDigest] = field(default_factory=list)
+    missing_files: list[str] = field(default_factory=list)

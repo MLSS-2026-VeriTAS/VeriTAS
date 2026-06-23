@@ -3,6 +3,7 @@ import json
 import pytest
 
 from veritas.verifier.cloud import build_cloud_run_manifest, redact_environment
+from veritas.verifier.detector import build_scalar_refusal_report, raw_delta
 from veritas.verifier.enums import (
     ActionType,
     CardStatus,
@@ -10,9 +11,15 @@ from veritas.verifier.enums import (
     DetectorMode,
     UnitOutputStatus,
 )
+from veritas.verifier.integrity import (
+    build_protected_digest_manifest,
+    compare_digest_manifests,
+    load_protected_digest_manifest,
+    write_protected_digest_manifest,
+)
 from veritas.verifier.io import append_jsonl, read_jsonl, write_json, write_jsonl
 from veritas.verifier.mlrc_adapter import MlrcArtifactError, candidates_from_idea_evals
-from veritas.verifier.types import RunRecord
+from veritas.verifier.types import CandidateRecord, RunRecord
 
 
 def test_canonical_enum_values_match_docs():
@@ -177,3 +184,161 @@ def test_parse_mlrc_idea_evals_rejects_missing_score(tmp_path):
             comparison_origin_id="baseline",
             pool_id="pool",
         )
+
+
+def test_integrity_manifest_round_trip_and_clean_compare(tmp_path):
+    task_root = tmp_path / "task"
+    (task_root / "data").mkdir(parents=True)
+    (task_root / "evaluation.py").write_text("metric = 1\n")
+    (task_root / "data" / "dev.json").write_text("{}\n")
+    (task_root / "read_only_files.txt").write_text("data/dev.json\n")
+
+    manifest = build_protected_digest_manifest(
+        run_id="run_001",
+        task_root=task_root,
+        protected_paths=["data"],
+        metric_paths=["evaluation.py"],
+        split_paths=["data/dev.json"],
+        read_only_file=task_root / "read_only_files.txt",
+        created_at="2026-06-21T00:00:00Z",
+    )
+
+    assert manifest.missing_files == []
+    assert {item.category for item in manifest.files} == {"metric_code", "data_split"}
+    assert compare_digest_manifests(manifest, manifest) == []
+
+    path = tmp_path / "manifest.json"
+    write_protected_digest_manifest(path, manifest)
+    loaded = load_protected_digest_manifest(path)
+    assert loaded.run_id == "run_001"
+    assert loaded.files[0].sha256 == manifest.files[0].sha256
+
+
+def test_integrity_compare_maps_changes_to_flags(tmp_path):
+    task_root = tmp_path / "task"
+    (task_root / "data").mkdir(parents=True)
+    (task_root / "protected").mkdir()
+    (task_root / "evaluation.py").write_text("metric = 1\n")
+    (task_root / "data" / "dev.json").write_text("{}\n")
+    (task_root / "protected" / "config.txt").write_text("ok\n")
+
+    before = build_protected_digest_manifest(
+        run_id="run_001",
+        task_root=task_root,
+        protected_paths=["protected/config.txt"],
+        metric_paths=["evaluation.py"],
+        split_paths=["data"],
+        created_at="2026-06-21T00:00:00Z",
+    )
+
+    (task_root / "evaluation.py").write_text("metric = 2\n")
+    (task_root / "data" / "dev.json").unlink()
+    (task_root / "protected" / "config.txt").unlink()
+
+    after = build_protected_digest_manifest(
+        run_id="run_001",
+        task_root=task_root,
+        protected_paths=["protected/config.txt"],
+        metric_paths=["evaluation.py"],
+        split_paths=["data"],
+        created_at="2026-06-21T00:01:00Z",
+    )
+
+    assert compare_digest_manifests(before, after) == [
+        "data_split_modified",
+        "metric_code_modified",
+        "protected_file_modified",
+    ]
+
+
+def test_integrity_unresolved_protected_set_flags_not_enforced(tmp_path):
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    manifest = build_protected_digest_manifest(
+        run_id="run_001",
+        task_root=task_root,
+        protected_paths=["missing.txt"],
+        created_at="2026-06-21T00:00:00Z",
+    )
+
+    assert manifest.missing_files == ["missing.txt"]
+    assert compare_digest_manifests(manifest, manifest) == ["integrity_not_enforced"]
+
+
+def test_scalar_refusal_report_does_not_fabricate_uncertainty():
+    incumbent = _candidate("baseline", 0.70)
+    candidate = _candidate("cand_001", 0.76)
+
+    report = build_scalar_refusal_report(
+        candidates=[incumbent, candidate],
+        incumbent=incumbent,
+        epsilon=0.01,
+        created_at="2026-06-21T00:00:00Z",
+    )
+
+    assert report["detector_mode"] == "single_scalar_no_se"
+    assert report["recommended_action"]["type"] == "stop_unresolved"
+    assert report["resolvability"]["dev_se_available"] is False
+    assert report["uncertainty"]["method"] == "none"
+    assert report["candidates"][0]["raw_delta"] == pytest.approx(0.06)
+    assert "paired_se" not in report["candidates"][0]
+    assert "model_prob_best" not in report["candidates"][0]
+    assert "audit_resolution_ratio" not in report
+
+
+def test_scalar_refusal_routes_severe_flags_to_human_review():
+    incumbent = _candidate("baseline", 0.70)
+    candidate = _candidate(
+        "cand_001",
+        0.76,
+        validity_flags=["protected_file_modified"],
+    )
+
+    report = build_scalar_refusal_report(
+        candidates=[incumbent, candidate],
+        incumbent=incumbent,
+        epsilon=0.01,
+        created_at="2026-06-21T00:00:00Z",
+    )
+
+    assert report["recommended_action"]["type"] == "human_review"
+    assert "protected_file_modified" in report["global_flags"]
+    assert report["candidates"][0]["decision"] == "human_review"
+
+
+def test_raw_delta_respects_minimize_direction():
+    incumbent = _candidate("baseline", 0.50, score_direction="minimize")
+    candidate = _candidate("cand_001", 0.40, score_direction="minimize")
+    assert raw_delta(candidate, incumbent) == pytest.approx(0.10)
+
+
+def _candidate(
+    candidate_id: str,
+    score: float,
+    *,
+    score_direction: str = "maximize",
+    unit_outputs_status: UnitOutputStatus = UnitOutputStatus.SINGLE_SCALAR_NO_SE,
+    validity_flags: list[str] | None = None,
+) -> CandidateRecord:
+    return CandidateRecord(
+        candidate_id=candidate_id,
+        logical_candidate_id=candidate_id,
+        run_id="run_001",
+        card_id=None,
+        parent_candidate_id="baseline" if candidate_id != "baseline" else None,
+        comparison_origin_id="baseline",
+        pool_id="pool_001",
+        step=None,
+        method_name=candidate_id,
+        phase="dev",
+        seed=0,
+        score=score,
+        score_direction=score_direction,
+        score_source="output/idea_evals.json",
+        score_extracted_by="runner_wrapper",
+        llm_reported_score=None,
+        llm_score_trusted=False,
+        snapshot_path=f"snapshots/{candidate_id}",
+        unit_outputs_status=unit_outputs_status,
+        validity_flags=validity_flags or [],
+    )
