@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from veritas.verifier.io import to_jsonable
+from veritas.verifier.mlrc_tasks import PRODUCT_RECOMMENDATION_METRICS, prepare_mlrc_task_ledger
 from veritas.verifier.pipeline import run_file_verifier
 from veritas.verifier.synthetic import run_synthetic_demo
 
@@ -57,6 +58,30 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Create and run a deterministic synthetic ledger in --ledger-dir.",
     )
+    parser.add_argument(
+        "--mlrc-task",
+        choices=["product-recommendation"],
+        help="Prepare verifier ledger artifacts for a supported MLRC task before verification.",
+    )
+    parser.add_argument(
+        "--candidate-specs",
+        help="JSONL candidate specs for --mlrc-task. Each row needs prediction_path.",
+    )
+    parser.add_argument(
+        "--labels-path",
+        help="Ground-truth label CSV for --mlrc-task.",
+    )
+    parser.add_argument(
+        "--product-recommendation-metric",
+        choices=PRODUCT_RECOMMENDATION_METRICS,
+        default="parsed_mrr",
+        help="Metric variant for product-recommendation unit outputs.",
+    )
+    parser.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="Prepare MLRC ledger artifacts without running the verifier.",
+    )
     return parser.parse_args()
 
 
@@ -75,6 +100,25 @@ def main() -> int:
         print(json.dumps(to_jsonable(summary), indent=2, sort_keys=True))
         return 0
 
+    prepared_summary = None
+    if args.mlrc_task:
+        if not args.candidate_specs:
+            raise SystemExit("--candidate-specs is required with --mlrc-task")
+        if not args.labels_path:
+            raise SystemExit("--labels-path is required with --mlrc-task")
+        prepared_summary = prepare_mlrc_task_ledger(
+            task_name=args.mlrc_task,
+            ledger_dir=ledger_dir,
+            candidate_specs_path=args.candidate_specs,
+            labels_path=args.labels_path,
+            phase="dev",
+            metric_variant=args.product_recommendation_metric,
+            incumbent_id=args.incumbent_id,
+        )
+        if args.prepare_only:
+            print(json.dumps(to_jsonable(prepared_summary), indent=2, sort_keys=True))
+            return 0
+
     report, action = run_file_verifier(
         ledger_dir,
         incumbent_id=args.incumbent_id,
@@ -88,6 +132,7 @@ def main() -> int:
             {
                 "recommended_action": report["recommended_action"],
                 "scheduler_next_action": to_jsonable(action),
+                "prepared_task": to_jsonable(prepared_summary),
             },
             indent=2,
             sort_keys=True,

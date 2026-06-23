@@ -1,3 +1,4 @@
+import csv
 import json
 import subprocess
 import sys
@@ -23,6 +24,11 @@ from veritas.verifier.integrity import (
 )
 from veritas.verifier.io import append_jsonl, read_jsonl, write_json, write_jsonl
 from veritas.verifier.mlrc_adapter import MlrcArtifactError, candidates_from_idea_evals
+from veritas.verifier.mlrc_tasks import (
+    MlrcTaskAdapterError,
+    prepare_mlrc_task_ledger,
+    product_recommendation_unit_outputs,
+)
 from veritas.verifier.model import (
     cluster_effective_candidates,
     estimate_eb_parameters,
@@ -633,6 +639,199 @@ def test_synthetic_demo_cli_exercises_per_unit_detector(tmp_path):
     assert "calibration_checks" in synthetic_report
 
 
+def test_product_recommendation_units_recompute_parsed_mrr():
+    predictions = [
+        {"session_id": "s1", "locale": "US", "next_item_prediction": "['a', 'b', 'c']"},
+        {"session_id": "s2", "locale": "US", "next_item_prediction": "['c', 'd']"},
+        {"session_id": "s3", "locale": "DE", "next_item_prediction": "['x', 'y']"},
+    ]
+    labels = [
+        {"session_id": "s1", "next_item": "b"},
+        {"session_id": "s2", "next_item": "c"},
+        {"session_id": "s3", "next_item": "z"},
+    ]
+
+    rows = product_recommendation_unit_outputs(
+        predictions=predictions,
+        labels=labels,
+        candidate_id="cand_001",
+        phase="dev",
+        metric_variant="parsed_mrr",
+    )
+
+    assert [row["unit_id"] for row in rows] == ["s1", "s2", "s3"]
+    assert [row["score_component"] for row in rows] == [0.5, 1.0, 0.0]
+    assert recompute_mean_score(rows) == pytest.approx(0.5)
+    assert rows[0]["metadata"]["rank"] == 2
+
+    exact_rows = product_recommendation_unit_outputs(
+        predictions=predictions[:1],
+        labels=labels[:1],
+        candidate_id="cand_001",
+        phase="dev",
+        metric_variant="mlrc_exact",
+    )
+    assert exact_rows[0]["score_component"] == pytest.approx(1 / ("['a', 'b', 'c']".index("b") + 1))
+
+
+def test_product_recommendation_adapter_prepares_verifier_ledger(tmp_path):
+    labels_path = tmp_path / "labels.csv"
+    baseline_path = tmp_path / "baseline_pred.csv"
+    candidate_path = tmp_path / "candidate_pred.csv"
+    specs_path = tmp_path / "candidate_specs.jsonl"
+    ledger_dir = tmp_path / "ledger"
+
+    _write_csv(
+        labels_path,
+        [
+            {"session_id": "s1", "next_item": "b"},
+            {"session_id": "s2", "next_item": "c"},
+            {"session_id": "s3", "next_item": "d"},
+            {"session_id": "s4", "next_item": "a"},
+        ],
+    )
+    _write_csv(
+        baseline_path,
+        [
+            {"session_id": "s1", "locale": "US", "next_item_prediction": "['x', 'b']"},
+            {"session_id": "s2", "locale": "US", "next_item_prediction": "['z', 'y', 'c']"},
+            {"session_id": "s3", "locale": "DE", "next_item_prediction": "['q']"},
+            {"session_id": "s4", "locale": "JP", "next_item_prediction": "['a']"},
+        ],
+    )
+    _write_csv(
+        candidate_path,
+        [
+            {"session_id": "s1", "locale": "US", "next_item_prediction": "['b']"},
+            {"session_id": "s2", "locale": "US", "next_item_prediction": "['c']"},
+            {"session_id": "s3", "locale": "DE", "next_item_prediction": "['d']"},
+            {"session_id": "s4", "locale": "JP", "next_item_prediction": "['z', 'a']"},
+        ],
+    )
+    write_jsonl(
+        specs_path,
+        [
+            {
+                "candidate_id": "baseline",
+                "method_name": "my_method",
+                "prediction_path": str(baseline_path),
+                "is_incumbent": True,
+            },
+            {
+                "candidate_id": "cand_better",
+                "method_name": "better_method",
+                "prediction_path": str(candidate_path),
+            },
+        ],
+    )
+
+    prepared = prepare_mlrc_task_ledger(
+        task_name="product-recommendation",
+        ledger_dir=ledger_dir,
+        candidate_specs_path=specs_path,
+        labels_path=labels_path,
+        incumbent_id="baseline",
+    )
+
+    assert prepared.candidate_count == 2
+    assert prepared.unit_count == 4
+    candidate_rows = read_jsonl(ledger_dir / "candidates.jsonl")
+    assert candidate_rows[0]["score"] == pytest.approx((0.5 + 1 / 3 + 0.0 + 1.0) / 4)
+    assert candidate_rows[1]["score"] == pytest.approx((1.0 + 1.0 + 1.0 + 0.5) / 4)
+    assert candidate_rows[1]["unit_outputs_status"] == "per_unit_bootstrap_ok"
+
+
+def test_product_recommendation_cli_prepares_and_runs_per_unit_detector(tmp_path):
+    labels_path = tmp_path / "labels.csv"
+    baseline_path = tmp_path / "baseline_pred.csv"
+    candidate_path = tmp_path / "candidate_pred.csv"
+    specs_path = tmp_path / "candidate_specs.jsonl"
+    ledger_dir = tmp_path / "ledger"
+
+    _write_csv(
+        labels_path,
+        [
+            {"session_id": f"s{i}", "next_item": target}
+            for i, target in enumerate(["a", "b", "c", "d", "e", "f"], start=1)
+        ],
+    )
+    _write_csv(
+        baseline_path,
+        [
+            {"session_id": "s1", "locale": "US", "next_item_prediction": "['x', 'a']"},
+            {"session_id": "s2", "locale": "US", "next_item_prediction": "['x', 'b']"},
+            {"session_id": "s3", "locale": "US", "next_item_prediction": "['x', 'c']"},
+            {"session_id": "s4", "locale": "US", "next_item_prediction": "['q']"},
+            {"session_id": "s5", "locale": "US", "next_item_prediction": "['q']"},
+            {"session_id": "s6", "locale": "US", "next_item_prediction": "['q']"},
+        ],
+    )
+    _write_csv(
+        candidate_path,
+        [
+            {"session_id": "s1", "locale": "US", "next_item_prediction": "['a']"},
+            {"session_id": "s2", "locale": "US", "next_item_prediction": "['b']"},
+            {"session_id": "s3", "locale": "US", "next_item_prediction": "['c']"},
+            {"session_id": "s4", "locale": "US", "next_item_prediction": "['d']"},
+            {"session_id": "s5", "locale": "US", "next_item_prediction": "['e']"},
+            {"session_id": "s6", "locale": "US", "next_item_prediction": "['f']"},
+        ],
+    )
+    write_jsonl(
+        specs_path,
+        [
+            {"candidate_id": "baseline", "prediction_path": str(baseline_path), "is_incumbent": True},
+            {"candidate_id": "cand_better", "prediction_path": str(candidate_path)},
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_verifier.py",
+            "--ledger-dir",
+            str(ledger_dir),
+            "--mlrc-task",
+            "product-recommendation",
+            "--candidate-specs",
+            str(specs_path),
+            "--labels-path",
+            str(labels_path),
+            "--bootstrap-samples",
+            "200",
+            "--epsilon",
+            "0.05",
+        ],
+        cwd=Path.cwd(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads((ledger_dir / "verifier_report.json").read_text())
+    manifest = json.loads((ledger_dir / "mlrc_task_manifest.json").read_text())
+    assert manifest["task_name"] == "product-recommendation"
+    assert report["detector_mode"] == "per_unit_bootstrap_ok"
+    assert report["candidates"][0]["candidate_id"] == "cand_better"
+    assert read_jsonl(ledger_dir / "unit_outputs" / "cand_better.jsonl")[0]["unit_type"] == "session"
+
+
+def test_mlrc_task_adapter_rejects_unsupported_task(tmp_path):
+    specs_path = tmp_path / "candidate_specs.jsonl"
+    labels_path = tmp_path / "labels.csv"
+    write_jsonl(specs_path, [{"candidate_id": "baseline", "prediction_path": "pred.csv"}])
+    _write_csv(labels_path, [{"next_item": "a"}])
+
+    with pytest.raises(MlrcTaskAdapterError, match="unsupported MLRC task"):
+        prepare_mlrc_task_ledger(
+            task_name="weather_forcast",
+            ledger_dir=tmp_path / "ledger",
+            candidate_specs_path=specs_path,
+            labels_path=labels_path,
+        )
+
+
 def _candidate(
     candidate_id: str,
     score: float,
@@ -676,3 +875,16 @@ def _scheduler_state(queue_threshold: int = 0) -> dict:
         },
         "queue_threshold": queue_threshold,
     }
+
+
+def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
