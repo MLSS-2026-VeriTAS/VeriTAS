@@ -1,4 +1,7 @@
 import json
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -564,6 +567,70 @@ def test_scheduler_requests_diverse_cards_when_queue_is_empty():
         pending_cards=[],
     )
     assert action.type == ActionType.REQUEST_DIVERSE_CARDS
+
+
+def test_file_based_cli_writes_scalar_refusal_outputs(tmp_path):
+    write_jsonl(
+        tmp_path / "candidates.jsonl",
+        [
+            _candidate("baseline", 0.70),
+            _candidate("cand_001", 0.76),
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_verifier.py",
+            "--ledger-dir",
+            str(tmp_path),
+            "--epsilon",
+            "0.01",
+        ],
+        cwd=Path.cwd(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads((tmp_path / "verifier_report.json").read_text())
+    next_action = json.loads((tmp_path / "scheduler_next_action.json").read_text())
+    assert report["detector_mode"] == "single_scalar_no_se"
+    assert report["recommended_action"]["type"] == "stop_unresolved"
+    assert next_action["type"] == "stop_unresolved"
+
+
+def test_synthetic_demo_cli_exercises_per_unit_detector(tmp_path):
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_verifier.py",
+            "--ledger-dir",
+            str(tmp_path),
+            "--synthetic-demo",
+            "--epsilon",
+            "0.02",
+            "--bootstrap-samples",
+            "200",
+            "--seed",
+            "123",
+        ],
+        cwd=Path.cwd(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads((tmp_path / "verifier_report.json").read_text())
+    synthetic_report = json.loads((tmp_path / "synthetic_report.json").read_text())
+
+    assert report["detector_mode"] == "per_unit_bootstrap_ok"
+    assert synthetic_report["greedy_candidate"] == "cand_noisy"
+    assert synthetic_report["verifier_candidate"] == "cand_stable"
+    assert synthetic_report["expected_regret"]["verifier"] < synthetic_report["expected_regret"]["greedy"]
+    assert "calibration_checks" in synthetic_report
 
 
 def _candidate(
