@@ -108,3 +108,28 @@ class ProtectedDigestManifest:
     protected_sources: list[str]
     files: list[FileDigest] = field(default_factory=list)
     missing_files: list[str] = field(default_factory=list)
+
+
+@dataclass
+class BootstrapResult:
+    candidate_order: list[str]
+    delta_hat: dict[str, float]
+    paired_se: dict[str, float]
+    covariance: list[list[float]]
+
+
+@dataclass
+class CandidateEvidence:
+    candidate_id: str
+    logical_candidate_id: str
+    delta_hat: float
+    total_se: float
+
+
+@dataclass
+class EffectiveCandidate:
+    cluster_id: str
+    member_ids: list[str]
+    delta_hat: float
+    total_se: float
+    flags: list[str] = field(default_factory=list)

@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from veritas.verifier.bootstrap import paired_bootstrap
 from veritas.verifier.cloud import build_cloud_run_manifest, redact_environment
 from veritas.verifier.detector import build_scalar_refusal_report, raw_delta
 from veritas.verifier.enums import (
@@ -19,7 +20,20 @@ from veritas.verifier.integrity import (
 )
 from veritas.verifier.io import append_jsonl, read_jsonl, write_json, write_jsonl
 from veritas.verifier.mlrc_adapter import MlrcArtifactError, candidates_from_idea_evals
-from veritas.verifier.types import CandidateRecord, RunRecord
+from veritas.verifier.model import (
+    cluster_effective_candidates,
+    estimate_eb_parameters,
+    rank_candidates,
+)
+from veritas.verifier.scheduler import choose_next_action
+from veritas.verifier.types import CandidateEvidence, CandidateRecord, RunRecord
+from veritas.verifier.unit_outputs import (
+    UnitOutputError,
+    align_unit_outputs,
+    load_unit_outputs,
+    recompute_mean_score,
+    recompute_score_check,
+)
 
 
 def test_canonical_enum_values_match_docs():
@@ -312,6 +326,246 @@ def test_raw_delta_respects_minimize_direction():
     assert raw_delta(candidate, incumbent) == pytest.approx(0.10)
 
 
+def test_unit_outputs_load_align_and_recompute(tmp_path):
+    path = tmp_path / "unit_outputs.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "unit_id": "u1",
+                "unit_type": "example",
+                "phase": "dev",
+                "prediction": "a",
+                "target_or_verifier_label": "a",
+                "score_component": None,
+            },
+            {
+                "unit_id": "u2",
+                "unit_type": "example",
+                "phase": "dev",
+                "prediction": "b",
+                "target_or_verifier_label": "a",
+                "score_component": None,
+            },
+        ],
+    )
+
+    rows = load_unit_outputs(path)
+    assert recompute_mean_score(rows) == pytest.approx(0.5)
+    recomputed, abs_error, status = recompute_score_check(rows, 0.5, 1e-9)
+    assert recomputed == pytest.approx(0.5)
+    assert abs_error == pytest.approx(0.0)
+    assert status == UnitOutputStatus.PER_UNIT_BOOTSTRAP_OK
+
+    with pytest.raises(UnitOutputError, match="unit_id mismatch"):
+        align_unit_outputs(rows, rows[:1])
+
+
+def test_recompute_score_mismatch_returns_status():
+    rows = [
+        {"unit_id": "u1", "score_component": 1.0},
+        {"unit_id": "u2", "score_component": 0.0},
+    ]
+    _, abs_error, status = recompute_score_check(rows, 0.9, 0.01)
+    assert abs_error == pytest.approx(0.4)
+    assert status == UnitOutputStatus.SCORE_RECOMPUTE_MISMATCH
+
+
+def test_paired_bootstrap_produces_covariance_for_aligned_units():
+    incumbent = [
+        {"unit_id": "u1", "score_component": 0.0},
+        {"unit_id": "u2", "score_component": 0.0},
+        {"unit_id": "u3", "score_component": 1.0},
+        {"unit_id": "u4", "score_component": 1.0},
+    ]
+    candidate_a = [
+        {"unit_id": "u1", "score_component": 1.0},
+        {"unit_id": "u2", "score_component": 0.0},
+        {"unit_id": "u3", "score_component": 1.0},
+        {"unit_id": "u4", "score_component": 1.0},
+    ]
+    candidate_b = [
+        {"unit_id": "u1", "score_component": 1.0},
+        {"unit_id": "u2", "score_component": 1.0},
+        {"unit_id": "u3", "score_component": 0.0},
+        {"unit_id": "u4", "score_component": 1.0},
+    ]
+
+    result = paired_bootstrap(
+        incumbent_rows=incumbent,
+        candidate_rows_by_id={"cand_a": candidate_a, "cand_b": candidate_b},
+        samples=200,
+        seed=123,
+    )
+
+    assert result.candidate_order == ["cand_a", "cand_b"]
+    assert result.delta_hat["cand_a"] == pytest.approx(0.25, abs=0.06)
+    assert result.delta_hat["cand_b"] == pytest.approx(0.25, abs=0.08)
+    assert result.paired_se["cand_a"] > 0
+    assert len(result.covariance) == 2
+    assert len(result.covariance[0]) == 2
+
+
+def test_paired_bootstrap_rejects_unaligned_candidate_units():
+    incumbent = [{"unit_id": "u1", "score_component": 0.0}]
+    candidate = [{"unit_id": "u2", "score_component": 1.0}]
+    with pytest.raises(ValueError, match="unit IDs do not align"):
+        paired_bootstrap(
+            incumbent_rows=incumbent,
+            candidate_rows_by_id={"cand": candidate},
+            samples=10,
+        )
+
+
+def test_eb_clustering_and_ranking_guards_tiny_pools():
+    evidences = [
+        CandidateEvidence("cand_a_seed1", "cand_a", 0.020, 0.010),
+        CandidateEvidence("cand_a_seed2", "cand_a", 0.030, 0.010),
+        CandidateEvidence("cand_b", "cand_b", 0.015, 0.010),
+    ]
+
+    effective = cluster_effective_candidates(evidences)
+    assert len(effective) == 2
+    cand_a = next(candidate for candidate in effective if candidate.cluster_id == "cand_a")
+    assert cand_a.member_ids == ["cand_a_seed1", "cand_a_seed2"]
+    assert "near_duplicate_cluster" in cand_a.flags
+
+    params = estimate_eb_parameters(effective)
+    assert "eb_ranking_only" in params["flags"]
+
+    ranking = rank_candidates(effective, epsilon=0.005)
+    assert "eb_ranking_only" in ranking["flags"]
+    assert ranking["candidates"][0]["posterior_mean_delta"] >= ranking["candidates"][1]["posterior_mean_delta"]
+
+
+def test_eb_tau2_collapse_is_flagged():
+    effective = [
+        CandidateEvidence("cand_a", "cand_a", 0.010, 0.050),
+        CandidateEvidence("cand_b", "cand_b", 0.011, 0.050),
+    ]
+    clustered = cluster_effective_candidates(effective)
+    ranking = rank_candidates(clustered, epsilon=0.01)
+    assert "tau2_collapse" in ranking["flags"]
+    assert "tau2_collapse" in ranking["candidates"][0]["flags"]
+
+
+def test_scheduler_scalar_refusal_stops_unresolved():
+    action = choose_next_action(
+        {
+            "detector_mode": "single_scalar_no_se",
+            "recommended_action": {"type": "stop_unresolved"},
+            "global_flags": ["single_scalar_no_se"],
+        },
+        _scheduler_state(),
+    )
+    assert action.type == ActionType.STOP_UNRESOLVED
+
+
+def test_scheduler_routes_severe_flags_to_human_review():
+    action = choose_next_action(
+        {
+            "detector_mode": "per_unit_bootstrap_ok",
+            "recommended_action": {
+                "type": "final_audit",
+                "candidate_id": "cand_001",
+            },
+            "global_flags": ["protected_file_modified"],
+        },
+        _scheduler_state(),
+    )
+    assert action.type == ActionType.HUMAN_REVIEW
+    assert action.candidate_id == "cand_001"
+
+
+def test_scheduler_final_audit_gate_passes():
+    action = choose_next_action(
+        {
+            "detector_mode": "per_unit_bootstrap_ok",
+            "recommended_action": {
+                "type": "final_audit",
+                "candidate_id": "cand_001",
+                "audit_resolution_ok": True,
+                "predicted_audit_resolution_ratio": 2.5,
+                "z_resolution": 2.0,
+            },
+            "global_flags": [],
+        },
+        _scheduler_state(),
+    )
+    assert action.type == ActionType.FINAL_AUDIT
+    assert action.candidate_id == "cand_001"
+
+
+def test_scheduler_final_audit_gate_blocks_missing_resolution():
+    action = choose_next_action(
+        {
+            "detector_mode": "per_unit_bootstrap_ok",
+            "recommended_action": {
+                "type": "final_audit",
+                "candidate_id": "cand_001",
+            },
+            "global_flags": [],
+        },
+        _scheduler_state(queue_threshold=0),
+    )
+    assert action.type == ActionType.STOP_UNRESOLVED
+
+
+def test_scheduler_rerun_and_nearby_and_pending_paths():
+    rerun = choose_next_action(
+        {
+            "detector_mode": "per_unit_bootstrap_ok",
+            "recommended_action": {
+                "type": "rerun_candidate",
+                "candidate_id": "cand_001",
+                "seed": 3,
+            },
+            "global_flags": [],
+        },
+        _scheduler_state(),
+    )
+    assert rerun.type == ActionType.RERUN_CANDIDATE
+    assert rerun.seed == 3
+
+    nearby = choose_next_action(
+        {
+            "detector_mode": "per_unit_bootstrap_ok",
+            "recommended_action": {
+                "type": "request_nearby_variants",
+                "candidate_id": "cand_001",
+            },
+            "global_flags": [],
+        },
+        _scheduler_state(),
+    )
+    assert nearby.type == ActionType.REQUEST_NEARBY_VARIANTS
+
+    pending = choose_next_action(
+        {
+            "detector_mode": "per_unit_bootstrap_ok",
+            "recommended_action": {"type": "stop_unresolved"},
+            "global_flags": [],
+        },
+        _scheduler_state(),
+        pending_cards=[{"card_id": "card_001", "status": "pending"}],
+    )
+    assert pending.type == ActionType.RUN_PENDING_CARD
+    assert pending.card_id == "card_001"
+
+
+def test_scheduler_requests_diverse_cards_when_queue_is_empty():
+    action = choose_next_action(
+        {
+            "detector_mode": "per_unit_bootstrap_ok",
+            "recommended_action": {"type": "stop_unresolved"},
+            "global_flags": [],
+        },
+        _scheduler_state(queue_threshold=2),
+        pending_cards=[],
+    )
+    assert action.type == ActionType.REQUEST_DIVERSE_CARDS
+
+
 def _candidate(
     candidate_id: str,
     score: float,
@@ -342,3 +596,16 @@ def _candidate(
         unit_outputs_status=unit_outputs_status,
         validity_flags=validity_flags or [],
     )
+
+
+def _scheduler_state(queue_threshold: int = 0) -> dict:
+    return {
+        "budget": {
+            "max_dev_runs": 10,
+            "used_dev_runs": 2,
+            "max_reruns_per_candidate": 3,
+            "max_audited_candidates": 1,
+            "used_audited_candidates": 0,
+        },
+        "queue_threshold": queue_threshold,
+    }
