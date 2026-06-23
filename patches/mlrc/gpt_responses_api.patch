@@ -1,7 +1,8 @@
 diff --git a/MLAgentBench/LLM.py b/MLAgentBench/LLM.py
+index 78bf975..6244976 100644
 --- a/MLAgentBench/LLM.py
 +++ b/MLAgentBench/LLM.py
-@@ -7,9 +7,21 @@ import json
+@@ -7,10 +7,22 @@ import json
  from .schema import TooLongPromptError, LLMError
  
  
@@ -25,8 +26,7 @@ diff --git a/MLAgentBench/LLM.py b/MLAgentBench/LLM.py
          "gpt-4o" : {
              "input" : 2.5 / 1e6,
              "output" : 10 / 1e6,
-@@ -113,19 +125,34 @@ except Exception as e:
-     pass
+@@ -117,18 +129,34 @@ except Exception as e:
      # print(e)
      # print("Could not load anthropic API key claude_api_key.txt.")
  
@@ -70,8 +70,7 @@ diff --git a/MLAgentBench/LLM.py b/MLAgentBench/LLM.py
  
  try:
      from azure.ai.inference import ChatCompletionsClient
-     from azure.core.credentials import AzureKeyCredential
-@@ -203,12 +230,15 @@ def log_to_file(log_file, prompt, completion, model, max_tokens_to_sample, num_p
+@@ -191,11 +219,14 @@ def log_to_file(log_file, prompt, completion, model, max_tokens_to_sample, num_p
  
      LOG_DIR = os.getenv("LOG_DIR", "logs/")
      cost_file = os.path.join(LOG_DIR, "env_log/", "api_cost.json")
@@ -86,9 +85,7 @@ diff --git a/MLAgentBench/LLM.py b/MLAgentBench/LLM.py
      curr_cost = num_prompt_tokens * MODEL2PRICE[model]["input"] + num_sample_tokens * MODEL2PRICE[model]["output"] 
      with open(cost_file, 'w') as writer:
          updated_content = {
-                 "total_cost" : content.get("total_cost", 0) + curr_cost,
-@@ -392,36 +422,126 @@ def complete_text_crfm(prompt="", stop_sequences = [], model="openai/gpt-4-0314"
-         log_to_file(log_file, prompt if not messages else str(messages), completion, model, max_tokens_to_sample)
+@@ -396,8 +427,110 @@ def complete_text_crfm(prompt="", stop_sequences = [], model="openai/gpt-4-0314"
      return completion
  
  
@@ -200,9 +197,7 @@ diff --git a/MLAgentBench/LLM.py b/MLAgentBench/LLM.py
      if "o1" in model.lower() or "o3" in model.lower():
          raw_request = {
                "model": model,
-               "max_completion_tokens": 64000 if model.lower() == "o1-mini" else 100000,
-               **kwargs
-@@ -449,7 +569,7 @@ def complete_text_openai(prompt, stop_sequences=[], model="gpt-4o-mini", max_to
+@@ -422,7 +555,7 @@ def complete_text_openai(prompt, stop_sequences=[], model="gpt-4o-mini", max_tok
  
      # Since o-series model does not support stop_sequences, we need to truncate observation by ourselves
      if "o1" in model.lower() or "o3" in model.lower():
@@ -211,8 +206,7 @@ diff --git a/MLAgentBench/LLM.py b/MLAgentBench/LLM.py
  
      if log_file is not None:
          log_to_file(log_file, prompt, completion, model, max_tokens_to_sample, num_prompt_tokens=usage.prompt_tokens, num_sample_tokens=usage.completion_tokens)
-@@ -498,12 +618,11 @@ def complete_text(prompt, log_file, model, **kwargs):
-     raise LLMError(str(error_msg))
+@@ -499,13 +632,12 @@ def complete_text(prompt, log_file, model, **kwargs):
  
  # specify fast models for summarization etc
  def complete_text_fast(prompt, **kwargs):
@@ -227,10 +221,12 @@ diff --git a/MLAgentBench/LLM.py b/MLAgentBench/LLM.py
 +    for model in ["gpt-5.4-mini"]:
          completion = complete_text("12+32=?", "logs/tmp.log", model)
          print(model)
+         print(completion)
 diff --git a/MLAgentBench/LLM_as_a_Judge.py b/MLAgentBench/LLM_as_a_Judge.py
+index 13f068f..b6837ad 100644
 --- a/MLAgentBench/LLM_as_a_Judge.py
 +++ b/MLAgentBench/LLM_as_a_Judge.py
-@@ -183,7 +183,7 @@ def get_llm_feedback(idea: str, code: str, task_name: str, max_retries: int = 3,
+@@ -183,7 +183,7 @@ def llm_evaluate_method_on_metric(scientificMethod: str, code: str, researchProb
  
      retries = 0
      log_file = os.path.join(os.getenv("LOG_DIR", "logs/"), "env_log", "llm_as_a_judge.txt")
@@ -240,10 +236,11 @@ diff --git a/MLAgentBench/LLM_as_a_Judge.py b/MLAgentBench/LLM_as_a_Judge.py
      while retries < max_retries:
          try:
 diff --git a/MLAgentBench/high_level_actions.py b/MLAgentBench/high_level_actions.py
+index 5e30cbd..5e7d91a 100644
 --- a/MLAgentBench/high_level_actions.py
 +++ b/MLAgentBench/high_level_actions.py
 @@ -91,7 +91,7 @@ def understand_file(file_name, things_to_look_for, work_dir=".", max_blocks=10,
-     else:
+         completion = complete_text_fast(prompt, log_file=kwargs["log_file"])
          return completion
  
 -EDIT_SCRIPT_MODEL = "gpt-4o-mini"
@@ -252,6 +249,7 @@ diff --git a/MLAgentBench/high_level_actions.py b/MLAgentBench/high_level_action
  
  @check_file_read_only(["script_name"])
 diff --git a/MLAgentBench/llm_test_cases.py b/MLAgentBench/llm_test_cases.py
+index 2ea93fe..1e40182 100644
 --- a/MLAgentBench/llm_test_cases.py
 +++ b/MLAgentBench/llm_test_cases.py
 @@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
@@ -264,10 +262,10 @@ diff --git a/MLAgentBench/llm_test_cases.py b/MLAgentBench/llm_test_cases.py
  MAX_ITERATIONS = 1
  
 diff --git a/MLAgentBench/runner.py b/MLAgentBench/runner.py
+index 709250c..e4ed9bd 100644
 --- a/MLAgentBench/runner.py
 +++ b/MLAgentBench/runner.py
 @@ -54,11 +54,11 @@ if __name__ == "__main__":
-     parser.add_argument("--resume-step", type=int, default=0, help="the step to resume from")
  
      # general agent configs
      parser.add_argument("--agent-type", type=str, default="ResearchAgent", help="agent type")
@@ -284,6 +282,7 @@ diff --git a/MLAgentBench/runner.py b/MLAgentBench/runner.py
      parser.add_argument("--agent-max-steps", type=int, default=50, help="the real number of max iterations for agent")
  
 diff --git a/MLAgentBench/utils.py b/MLAgentBench/utils.py
+index a68eb44..965212f 100644
 --- a/MLAgentBench/utils.py
 +++ b/MLAgentBench/utils.py
 @@ -31,7 +31,7 @@ def sanitize_json_string(s):
@@ -296,6 +295,7 @@ diff --git a/MLAgentBench/utils.py b/MLAgentBench/utils.py
      MAX_RETRYS = 3
  
 diff --git a/launch.sh b/launch.sh
+index 63720bd..67a2655 100644
 --- a/launch.sh
 +++ b/launch.sh
 @@ -4,10 +4,11 @@ source ~/.bashrc
@@ -311,7 +311,7 @@ diff --git a/launch.sh b/launch.sh
  
  if [[ "${TASK_ENV}" == "weather_forcast" ]]; then
  	MAX_HOURS=10
-@@ -60,7 +61,7 @@ nohup python -u -m MLAgentBench.runner \
+@@ -59,7 +60,7 @@ nohup python -u -m MLAgentBench.runner \
  	--work-dir ${WORKSPACE_DIR} \
  	--llm-name ${MODEL} \
  	--edit-script-llm-name ${MODEL} \

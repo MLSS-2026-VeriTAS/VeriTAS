@@ -32,6 +32,36 @@ tmux a -t 0
 
 ## Environment Setup
 
+Clone or copy VeriTAS onto the VM. If the repository is private and `git clone`
+fails from the VM, transfer a branch tarball from a machine that already has
+access:
+
+```bash
+# local machine
+git archive --format=tar.gz --prefix=VeriTAS/ origin/Walter -o VeriTAS-Walter.tar.gz
+gcloud compute scp VeriTAS-Walter.tar.gz USER@instance-20260622-053006:~/work/ \
+  --zone us-central1-b --project veritas-500122
+
+# VM
+mkdir -p ~/work && cd ~/work
+tar xzf VeriTAS-Walter.tar.gz
+```
+
+Apply the MLRC GPT patch once after cloning MLRC-Bench:
+
+```bash
+cd ~/work/VeriTAS
+bash scripts/apply_mlrc_patch.sh ../MLRC-Bench
+```
+
+For GPT-5.x runs, export the public OpenAI API key on the VM:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+export OPENAI_REASONING_EFFORT=low
+unset MY_AZURE_OPENAI_ENDPOINT
+```
+
 Activate the task environment and set run variables:
 
 ```bash

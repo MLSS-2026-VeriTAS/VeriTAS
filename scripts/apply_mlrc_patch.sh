@@ -44,6 +44,12 @@ patch -p1 --dry-run < "${PATCH_FILE}" >/dev/null
 echo "Applying MLRC GPT Responses API patch..."
 patch -p1 < "${PATCH_FILE}"
 
+if ! grep -q "openai_client_kind" "${MLRC_DIR}/MLAgentBench/LLM.py"; then
+  echo "Patch verification failed: LLM.py is missing OpenAI Responses API support." >&2
+  echo "The patch may have only partially applied. Reset MLRC-Bench and rerun this script." >&2
+  exit 1
+fi
+
 echo "Patch applied. Current MLRC GPT defaults:"
 grep -R "gpt-5.4-mini" \
   MLAgentBench/LLM.py \
