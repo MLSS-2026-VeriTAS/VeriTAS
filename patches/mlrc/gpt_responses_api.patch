@@ -1,0 +1,322 @@
+diff --git a/MLAgentBench/LLM.py b/MLAgentBench/LLM.py
+--- a/MLAgentBench/LLM.py
++++ b/MLAgentBench/LLM.py
+@@ -7,9 +7,21 @@ import json
+ from .schema import TooLongPromptError, LLMError
+ 
+ 
+-# https://openai.com/api/pricing/ as of 01/10/2025
++# https://openai.com/api/pricing/ as of 06/23/2026
+ # https://aws.amazon.com/bedrock/pricing/ as of 01/20/2025
+ # https://ai.google.dev/pricing#1_5pro as of 01/20/2025
+ MODEL2PRICE = {
++        "gpt-5.5" : {
++            "input" : 5 / 1e6,
++            "output" : 30 / 1e6,
++            },
++        "gpt-5.4" : {
++            "input" : 2.5 / 1e6,
++            "output" : 15 / 1e6,
++            },
++        "gpt-5.4-mini" : {
++            "input" : 0.75 / 1e6,
++            "output" : 4.5 / 1e6,
++            },
+         "gpt-4o" : {
+             "input" : 2.5 / 1e6,
+             "output" : 10 / 1e6,
+@@ -113,19 +125,34 @@ except Exception as e:
+     pass
+     # print(e)
+     # print("Could not load anthropic API key claude_api_key.txt.")
+ 
++openai_client = None
++openai_client_kind = None
++openai_import_error = None
+ try:
+     import openai
+-    # setup OpenAI API key
+-    openai_api_key = os.getenv('MY_OPENAI_API_KEY')
+-    openai_api_base = os.getenv('MY_AZURE_OPENAI_ENDPOINT')
+-    openai_client = openai.AzureOpenAI(
+-            azure_endpoint=openai_api_base,
+-            api_key=openai_api_key,
+-            api_version="2024-12-01-preview",
+-            )
++
++    # Prefer the current public OpenAI API for GPT-5.x / Responses API runs.
++    # Keep the legacy Azure path for older deployments that still use it.
++    if os.getenv("OPENAI_API_KEY"):
++        openai_client = openai.OpenAI(
++            api_key=os.getenv("OPENAI_API_KEY"),
++            base_url=os.getenv("OPENAI_BASE_URL") or None,
++            organization=os.getenv("OPENAI_ORG_ID") or None,
++            project=os.getenv("OPENAI_PROJECT_ID") or None,
++        )
++        openai_client_kind = "openai"
++    elif os.getenv("MY_OPENAI_API_KEY") and not os.getenv("MY_AZURE_OPENAI_ENDPOINT"):
++        openai_client = openai.OpenAI(api_key=os.getenv("MY_OPENAI_API_KEY"))
++        openai_client_kind = "openai"
++    elif os.getenv("MY_OPENAI_API_KEY") and os.getenv("MY_AZURE_OPENAI_ENDPOINT"):
++        openai_client = openai.AzureOpenAI(
++                azure_endpoint=os.getenv("MY_AZURE_OPENAI_ENDPOINT"),
++                api_key=os.getenv("MY_OPENAI_API_KEY"),
++                api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
++                )
++        openai_client_kind = "azure"
+ except Exception as e:
+-    pass
++    openai_import_error = e
+ 
+ try:
+     from azure.ai.inference import ChatCompletionsClient
+     from azure.core.credentials import AzureKeyCredential
+@@ -203,12 +230,15 @@ def log_to_file(log_file, prompt, completion, model, max_tokens_to_sample, num_p
+ 
+     LOG_DIR = os.getenv("LOG_DIR", "logs/")
+     cost_file = os.path.join(LOG_DIR, "env_log/", "api_cost.json")
++    os.makedirs(os.path.dirname(cost_file), exist_ok=True)
+     content = dict()
+     if os.path.exists(cost_file):
+         with open(cost_file, 'r') as reader:
+             content = json.load(reader)
+ 
++    if model not in MODEL2PRICE:
++        raise LLMError(f"Missing MODEL2PRICE entry for model {model!r}")
+     curr_cost = num_prompt_tokens * MODEL2PRICE[model]["input"] + num_sample_tokens * MODEL2PRICE[model]["output"] 
+     with open(cost_file, 'w') as writer:
+         updated_content = {
+                 "total_cost" : content.get("total_cost", 0) + curr_cost,
+@@ -392,36 +422,126 @@ def complete_text_crfm(prompt="", stop_sequences = [], model="openai/gpt-4-0314"
+         log_to_file(log_file, prompt if not messages else str(messages), completion, model, max_tokens_to_sample)
+     return completion
+ 
+ 
+-def complete_text_openai(prompt, stop_sequences=[], model="gpt-4o-mini", max_tokens_to_sample=4000, temperature=0.5, log_file=None, **kwargs):
++def _is_responses_api_model(model):
++    return model.startswith("gpt-5")
++
++
++def _require_openai_client(model):
++    if openai_client is None:
++        detail = f" ({openai_import_error})" if openai_import_error else ""
++        raise LLMError(
++            f"OpenAI client is not configured for {model!r}{detail}. "
++            "Set OPENAI_API_KEY for current GPT models."
++        )
++
++
++def _truncate_stop_sequences(text, stop_sequences):
++    completion = text or ""
++    for stop_sequence in stop_sequences or []:
++        if not stop_sequence:
++            continue
++        index = completion.find(stop_sequence)
++        if index >= 0:
++            completion = completion[:index]
++    return completion
++
++
++def _usage_value(usage, key):
++    if usage is None:
++        return 0
++    if isinstance(usage, dict):
++        return int(usage.get(key, 0) or 0)
++    return int(getattr(usage, key, 0) or 0)
++
++
++def _responses_output_text(response):
++    if getattr(response, "output_text", None):
++        return response.output_text
++
++    output = getattr(response, "output", None) or []
++    chunks = []
++    for item in output:
++        content = getattr(item, "content", None)
++        if content is None and isinstance(item, dict):
++            content = item.get("content")
++        for part in content or []:
++            text = getattr(part, "text", None)
++            if text is None and isinstance(part, dict):
++                text = part.get("text")
++            if text:
++                chunks.append(text)
++    return "".join(chunks)
++
++
++def _complete_text_openai_responses(prompt, stop_sequences, model, max_tokens_to_sample, log_file, kwargs):
++    _require_openai_client(model)
++    if openai_client_kind != "openai":
++        raise LLMError(
++            f"{model!r} should use the public OpenAI Responses API. "
++            "Set OPENAI_API_KEY and unset MY_AZURE_OPENAI_ENDPOINT for this run."
++        )
++
++    reasoning_effort = kwargs.pop(
++        "reasoning_effort",
++        os.getenv("OPENAI_REASONING_EFFORT", "low"),
++    )
++    raw_request = {
++        "model": model,
++        "input": [{"role": "user", "content": prompt}],
++        "max_output_tokens": max_tokens_to_sample,
++        **kwargs,
++    }
++    if reasoning_effort:
++        raw_request["reasoning"] = {"effort": reasoning_effort}
++
++    response = openai_client.responses.create(**raw_request)
++    completion = _truncate_stop_sequences(_responses_output_text(response), stop_sequences)
++    usage = getattr(response, "usage", None)
++    num_prompt_tokens = _usage_value(usage, "input_tokens")
++    num_sample_tokens = _usage_value(usage, "output_tokens")
++
++    if log_file is not None:
++        log_to_file(
++            log_file,
++            prompt,
++            completion,
++            model,
++            max_tokens_to_sample,
++            num_prompt_tokens=num_prompt_tokens,
++            num_sample_tokens=num_sample_tokens,
++        )
++    return completion
++
++
++def complete_text_openai(prompt, stop_sequences=[], model="gpt-5.4-mini", max_tokens_to_sample=4000, temperature=0.5, log_file=None, **kwargs):
+     """ Call the OpenAI API to complete a prompt."""
++    if _is_responses_api_model(model):
++        return _complete_text_openai_responses(
++            prompt,
++            stop_sequences,
++            model,
++            max_tokens_to_sample,
++            log_file,
++            kwargs,
++        )
++
++    _require_openai_client(model)
+     if "o1" in model.lower() or "o3" in model.lower():
+         raw_request = {
+               "model": model,
+               "max_completion_tokens": 64000 if model.lower() == "o1-mini" else 100000,
+               **kwargs
+@@ -449,7 +569,7 @@ def complete_text_openai(prompt, stop_sequences=[], model="gpt-4o-mini", max_to
+ 
+     # Since o-series model does not support stop_sequences, we need to truncate observation by ourselves
+     if "o1" in model.lower() or "o3" in model.lower():
+-        completion = re.sub(r"Observation:.*", "", completion, flags=re.DOTALL | re.MULTILINE)
++        completion = _truncate_stop_sequences(completion, stop_sequences)
+ 
+     if log_file is not None:
+         log_to_file(log_file, prompt, completion, model, max_tokens_to_sample, num_prompt_tokens=usage.prompt_tokens, num_sample_tokens=usage.completion_tokens)
+@@ -498,12 +618,11 @@ def complete_text(prompt, log_file, model, **kwargs):
+     raise LLMError(str(error_msg))
+ 
+ # specify fast models for summarization etc
+ def complete_text_fast(prompt, **kwargs):
+-    FAST_MODEL = os.getenv("FAST_MODEL", "gpt-4o-mini")
++    FAST_MODEL = os.getenv("FAST_MODEL", "gpt-5.4-mini")
+     return complete_text(prompt = prompt, model = FAST_MODEL, temperature =0.01, **kwargs)
+ 
+ if __name__ == "__main__":
+     os.makedirs("logs/env_log", exist_ok=True)
+-    # for model in ["o1", "o1-mini", "gpt-4o", "gpt-4o-mini", "claude-3-5-sonnet-v2", "gemini-exp-1206", "llama3-1-405b-instruct"]:
+-    for model in ["gpt-4o", "gpt-4o-mini"]:
++    for model in ["gpt-5.4-mini"]:
+         completion = complete_text("12+32=?", "logs/tmp.log", model)
+         print(model)
+diff --git a/MLAgentBench/LLM_as_a_Judge.py b/MLAgentBench/LLM_as_a_Judge.py
+--- a/MLAgentBench/LLM_as_a_Judge.py
++++ b/MLAgentBench/LLM_as_a_Judge.py
+@@ -183,7 +183,7 @@ def get_llm_feedback(idea: str, code: str, task_name: str, max_retries: int = 3,
+ 
+     retries = 0
+     log_file = os.path.join(os.getenv("LOG_DIR", "logs/"), "env_log", "llm_as_a_judge.txt")
+-    FEEDBACK_MODEL = os.getenv("FEEDBACK_MODEL", "o1")
++    FEEDBACK_MODEL = os.getenv("FEEDBACK_MODEL", "gpt-5.4-mini")
+     FEEDBACK_MAX_TOKENS = int(os.getenv("FEEDBACK_MAX_TOKENS", "4000"))
+     while retries < max_retries:
+         try:
+diff --git a/MLAgentBench/high_level_actions.py b/MLAgentBench/high_level_actions.py
+--- a/MLAgentBench/high_level_actions.py
++++ b/MLAgentBench/high_level_actions.py
+@@ -91,7 +91,7 @@ def understand_file(file_name, things_to_look_for, work_dir=".", max_blocks=10,
+     else:
+         return completion
+ 
+-EDIT_SCRIPT_MODEL = "gpt-4o-mini"
++EDIT_SCRIPT_MODEL = os.getenv("EDIT_SCRIPT_MODEL", "gpt-5.4-mini")
+ EDIT_SCRIPT_MAX_TOKENS = 4000
+ 
+ @check_file_read_only(["script_name"])
+diff --git a/MLAgentBench/llm_test_cases.py b/MLAgentBench/llm_test_cases.py
+--- a/MLAgentBench/llm_test_cases.py
++++ b/MLAgentBench/llm_test_cases.py
+@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
+ 
+ from MLAgentBench.LLM import complete_text, complete_text_fast, LOG_DIR
+ 
+-FEEDBACK_MODEL = "o1-mini"
++FEEDBACK_MODEL = os.getenv("FEEDBACK_MODEL", "gpt-5.4-mini")
+ FEEDBACK_MAX_TOKENS = 4000
+ MAX_ITERATIONS = 1
+ 
+diff --git a/MLAgentBench/runner.py b/MLAgentBench/runner.py
+--- a/MLAgentBench/runner.py
++++ b/MLAgentBench/runner.py
+@@ -54,11 +54,11 @@ if __name__ == "__main__":
+     parser.add_argument("--resume-step", type=int, default=0, help="the step to resume from")
+ 
+     # general agent configs
+     parser.add_argument("--agent-type", type=str, default="ResearchAgent", help="agent type")
+-    parser.add_argument("--llm-name", type=str, default="o1-mini", help="llm name")
+-    parser.add_argument("--fast-llm-name", type=str, default="gpt-4o-mini", help="llm name")
+-    parser.add_argument("--feedback-llm-name", type=str, default="o1-preview", help="llm name")
++    parser.add_argument("--llm-name", type=str, default="gpt-5.4-mini", help="llm name")
++    parser.add_argument("--fast-llm-name", type=str, default="gpt-5.4-mini", help="llm name")
++    parser.add_argument("--feedback-llm-name", type=str, default="gpt-5.4-mini", help="llm name")
+     parser.add_argument("--feedback-llm-max-tokens", type=int, default=4000, help="llm max tokens")
+-    parser.add_argument("--edit-script-llm-name", type=str, default="o1-mini", help="llm name")
++    parser.add_argument("--edit-script-llm-name", type=str, default="gpt-5.4-mini", help="llm name")
+     parser.add_argument("--edit-script-llm-max-tokens", type=int, default=4000, help="llm max tokens")
+     parser.add_argument("--agent-max-steps", type=int, default=50, help="the real number of max iterations for agent")
+ 
+diff --git a/MLAgentBench/utils.py b/MLAgentBench/utils.py
+--- a/MLAgentBench/utils.py
++++ b/MLAgentBench/utils.py
+@@ -31,7 +31,7 @@ def sanitize_json_string(s):
+     return re.sub(r'"([^"]*)"', lambda m: '"' + m.group(1).replace('\n', '\\n').replace('\"', '\\"') + '"', s)
+ 
+ def summarize_code(code):
+-    FEEDBACK_MODEL = os.getenv("FEEDBACK_MODEL", "o1")
++    FEEDBACK_MODEL = os.getenv("FEEDBACK_MODEL", "gpt-5.4-mini")
+     FEEDBACK_MAX_TOKENS = int(os.getenv("FEEDBACK_MAX_TOKENS", "4000"))
+     MAX_RETRYS = 3
+ 
+diff --git a/launch.sh b/launch.sh
+--- a/launch.sh
++++ b/launch.sh
+@@ -4,10 +4,11 @@ source ~/.bashrc
+ conda activate mlab
+ 
+ TASK_ENV=$1 # llm-merging
+-MODEL=$2 # o1-mini, model for implementing the idea
++MODEL=$2 # GPT model for implementing the idea
+ GPU_ID=$3 # 1
+ IDEA_PROPOSAL_MODEL=$4
+ OPTION=$5 # rag/0/1/...
++FEEDBACK_MODEL=${FEEDBACK_MODEL:-${MODEL}}
+ 
+ if [[ "${TASK_ENV}" == "weather_forcast" ]]; then
+ 	MAX_HOURS=10
+@@ -60,7 +61,7 @@ nohup python -u -m MLAgentBench.runner \
+ 	--work-dir ${WORKSPACE_DIR} \
+ 	--llm-name ${MODEL} \
+ 	--edit-script-llm-name ${MODEL} \
+-	--feedback-llm-name "o1" \
++	--feedback-llm-name ${FEEDBACK_MODEL} \
+ 	--fast-llm-name ${MODEL} \
+ 	--max-api-cost ${MAX_API_COST} \
+ 	--agent-max-steps ${MAX_STEPS} \
