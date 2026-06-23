@@ -111,9 +111,16 @@ class Verifier:
 
             ig = model.improvement_information(delta_mean, delta_var, cfg.min_variance)
             reward = poi * ig
+            accept = poi > cfg.tau
 
-            self._incumbent_mean = cand_mean
-            self._incumbent_var = cand_var
+            # Always initialize the incumbent state after the first observation.
+            # The deployed frontier only advances when the POI rule accepts.
+            if accept:
+                self._incumbent_mean = cand_mean
+                self._incumbent_var = cand_var
+            else:
+                self._incumbent_mean = prior_mean
+                self._incumbent_var = prior_var
             self._initialized = True
 
             result = VerifierResult(
@@ -122,7 +129,7 @@ class Verifier:
                 poi=poi,
                 info_gain=ig,
                 expected_improvement=ei,
-                accept=True,
+                accept=accept,
                 delta_posterior=PosteriorSummary(delta_mean, delta_var ** 0.5, float("inf")),
                 incumbent_posterior=self.incumbent,  # type: ignore[arg-type]
                 used_rubric_prior=used_rubric,

@@ -12,9 +12,9 @@ closed-form primitives used by ``verifier.py``:
 * ``probability_of_improvement`` / ``expected_improvement`` - acquisition
                            quantities over the improvement ``Delta_t``.
 * ``kl_gaussian``       - KL between two Gaussians.
-* ``improvement_information`` - the validated information gain: bits of evidence
-                           that ``Delta_t`` exceeds zero (KL of the improvement
-                           posterior against its null-shifted counterpart).
+* ``improvement_information`` - the one-sided validated information gain:
+                           evidence that ``Delta_t`` exceeds zero (positive-only
+                           KL-style score against the null).
 
 Everything here is pure (no I/O, no global state) and unit-tested against
 hand-computed values.
@@ -134,13 +134,13 @@ def kl_gaussian(
 def improvement_information(
     delta_mean: float, delta_var: float, min_variance: float = 1e-9
 ) -> float:
-    """Validated information gain: evidence that ``Delta_t > 0`` (nats).
+    """Validated information gain for positive improvement evidence (nats).
 
     Defined as the KL divergence between the improvement posterior
     ``N(delta_mean, delta_var)`` and the same posterior shifted to the
-    no-improvement null ``N(0, delta_var)``. For Gaussians this reduces to the
-    well-conditioned squared signal-to-noise ratio ``delta_mean^2 /
-    (2 * delta_var)``: large only when a clear gain is measured with low
-    uncertainty, near zero for within-noise or highly uncertain iterations.
+    no-improvement null ``N(0, delta_var)``, but clipped to be one-sided:
+    regressions carry zero validated gain. For Gaussians this is
+    ``max(delta_mean, 0)^2 / (2 * delta_var)``.
     """
-    return kl_gaussian(delta_mean, delta_var, 0.0, delta_var, min_variance)
+    positive_delta = max(delta_mean, 0.0)
+    return kl_gaussian(positive_delta, delta_var, 0.0, delta_var, min_variance)

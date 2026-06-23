@@ -139,18 +139,36 @@ def merge_seed_observations(
     """
     if not runs:
         return []
-    n = min(len(r) for r in runs)
+    reference = runs[0]
+
+    def obs_key(obs: IterationObservation):
+        has_step = "step" in obs.metadata
+        step_value = obs.metadata.get("step") if has_step else None
+        return obs.iteration, has_step, step_value
+
+    expected_keys = [obs_key(obs) for obs in reference]
+    for idx, run in enumerate(runs[1:], start=1):
+        run_keys = [obs_key(obs) for obs in run]
+        if run_keys != expected_keys:
+            raise ValueError(
+                "merge_seed_observations requires all runs to have matching "
+                "iteration/step structure; run 0 and run "
+                f"{idx} differ."
+            )
+
     merged: List[IterationObservation] = []
-    for i in range(n):
+    for i in range(len(reference)):
         scores: List[float] = []
         for run in runs:
             scores.extend(run[i].scores)
+        meta = dict(reference[i].metadata)
+        meta["seeds"] = len(runs)
         merged.append(
             IterationObservation(
-                iteration=i,
+                iteration=reference[i].iteration,
                 scores=scores,
                 higher_is_better=higher_is_better,
-                metadata={"seeds": len(runs)},
+                metadata=meta,
             )
         )
     return merged

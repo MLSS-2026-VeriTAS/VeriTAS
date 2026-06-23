@@ -89,9 +89,10 @@ def test_kl_gaussian_zero_for_identical_and_positive_otherwise():
 
 
 def test_improvement_information_is_squared_snr():
-    # IG = delta_mean^2 / (2 * delta_var); zero at no improvement, grows with SNR.
+    # IG = max(delta_mean, 0)^2 / (2 * delta_var); one-sided in delta_mean.
     assert model.improvement_information(0.0, 1.0) == pytest.approx(0.0, abs=1e-12)
     assert model.improvement_information(1.0, 0.5) == pytest.approx(1.0, rel=1e-9)
+    assert model.improvement_information(-1.0, 0.5) == pytest.approx(0.0, abs=1e-12)
     assert model.improvement_information(2.0, 0.5) > model.improvement_information(1.0, 0.5)
     # More uncertainty (larger variance) lowers the information for a fixed gain.
     assert model.improvement_information(1.0, 1.0) < model.improvement_information(1.0, 0.5)
@@ -200,6 +201,22 @@ def test_merge_seed_observations_gathers_scores():
     merged = mlrc_adapter.merge_seed_observations(runs)
     assert len(merged) == 2
     assert sorted(merged[0].scores) == [0.5, 0.52]
+    assert merged[0].metadata["seeds"] == 2
+
+
+def test_merge_seed_observations_rejects_mismatched_steps():
+    runs = [
+        [
+            IterationObservation(0, [0.5], metadata={"step": 0}),
+            IterationObservation(1, [0.6], metadata={"step": 5}),
+        ],
+        [
+            IterationObservation(0, [0.51], metadata={"step": 0}),
+            IterationObservation(1, [0.59], metadata={"step": 6}),
+        ],
+    ]
+    with pytest.raises(ValueError, match="matching iteration/step structure"):
+        mlrc_adapter.merge_seed_observations(runs)
 
 
 # --------------------------------------------------------------------------- #
@@ -231,9 +248,15 @@ def test_first_iteration_initializes_incumbent():
     v = Verifier()
     assert v.incumbent is None
     res = v.update(IterationObservation(0, [0.5, 0.5, 0.5]))
-    assert res.accept
     assert v.incumbent is not None
     assert v.incumbent.mean == pytest.approx(res.incumbent_posterior.mean)
+
+
+def test_first_iteration_respects_poi_threshold():
+    cfg = VerifierConfig(prior=NIGPrior(mu=0.0, lam=1.0, alpha=2.0, beta=0.001), tau=0.95)
+    v = Verifier(config=cfg)
+    res = v.update(IterationObservation(0, scores=[-2.0, -2.1, -1.9]))
+    assert not res.accept
 
 
 def test_reward_is_non_negative_over_random_trajectory():

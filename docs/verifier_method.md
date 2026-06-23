@@ -102,19 +102,20 @@ test that directly controls credited false improvements.
 
 ### 5.2 Validated information gain (the additional score)
 
-We define the information an iteration contributes as the evidence that it
-genuinely improved on the incumbent, i.e. the KL divergence between the
-improvement posterior and its null-shifted counterpart (no improvement):
+We define the information an iteration contributes as one-sided evidence that it
+genuinely improved on the incumbent, i.e. a KL-style score against the
+no-improvement null:
 
 ```
-IG_t = KL( N(mu_D, sigma_D^2) || N(0, sigma_D^2) ) = mu_D^2 / (2 sigma_D^2).
+IG_t = KL( N(max(mu_D, 0), sigma_D^2) || N(0, sigma_D^2) )
+     = max(mu_D, 0)^2 / (2 sigma_D^2).
 ```
 
-This is the squared signal-to-noise ratio of the measured improvement: it is
-non-negative, scale-free, near zero for within-noise or highly uncertain
-iterations, and large only for clear gains measured with low uncertainty. It is
-well conditioned (unlike a KL between beliefs of very different variance, which
-can diverge when uncertainty inflates).
+This is a one-sided squared signal-to-noise ratio of the measured improvement:
+it is non-negative, exactly zero for regressions, near zero for within-noise or
+highly uncertain iterations, and large only for clear gains measured with low
+uncertainty. It is well conditioned (unlike a KL between beliefs of very
+different variance, which can diverge when uncertainty inflates).
 
 ### 5.3 Expected improvement (diagnostic)
 

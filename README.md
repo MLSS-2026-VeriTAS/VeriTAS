@@ -18,7 +18,7 @@ In addition to the existing MLRC-Bench scorers, VeriTAS introduces a **Verifier*
 Concretely, the Verifier models each iteration's noisy objective scores with a conjugate Normal-Inverse-Gamma posterior over the method's latent performance, forms the posterior over the improvement `Delta_t` versus the incumbent, and emits:
 
 - a **probability of improvement** `POI_t = P(Delta_t > eps_t)` (the decision rule: accept iff `POI_t > tau`), where the minimal effect size `eps_t` scales with the inferred measurement noise;
-- a **validated information gain** `IG_t = Delta_mu^2 / (2 Delta_sigma^2)` (evidence the iteration genuinely improved on the incumbent);
+- a **validated information gain** `IG_t = max(Delta_mu, 0)^2 / (2 Delta_sigma^2)` (one-sided evidence for genuine improvement on the incumbent);
 - an additional score (reward) `r_t = POI_t * IG_t`.
 
 It can also fuse the MLRC-Bench `LLM_as_a_Judge` rubric ratings into a calibrated prior over the improvement. The full probabilistic model, priors, posterior quantities, and decision rule are specified in [`docs/verifier_method.md`](docs/verifier_method.md). The implementation lives in [`veritas/verifier/`](veritas/verifier/).
