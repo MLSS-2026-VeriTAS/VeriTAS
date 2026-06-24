@@ -148,3 +148,41 @@ python scripts/mlrc_verifier_hook.py \
   --bootstrap-samples 200 \
   --epsilon 0.005
 ```
+
+## Enable The MLRC Online Hook
+
+This is the minimal in-run integration for product-recommendation. It preserves
+each successful dev `pred.csv` and, once a baseline prediction exists, runs the
+VeriTAS hook after candidate dev evaluations. Hook failures are logged and MLRC
+continues.
+
+Apply the patch after the GPT patch:
+
+```bash
+cd ~/work/VeriTAS
+bash scripts/apply_mlrc_veritas_hook_patch.sh ../MLRC-Bench
+```
+
+Enable it before `launch.sh`:
+
+```bash
+cd ~/work/MLRC-Bench
+conda activate mlab
+
+export VERITAS_HOOK_ENABLE=1
+export VERITAS_REPO_DIR=~/work/VeriTAS
+export VERITAS_HOOK_BOOTSTRAP_SAMPLES=50
+export VERITAS_HOOK_EPSILON=0.005
+export VERITAS_HOOK_TIMEOUT=300
+
+bash launch.sh product-recommendation gpt-5.4 0 TEST_MODEL
+```
+
+During the run, inspect:
+
+```bash
+RUN_DIR=logs/product-recommendation/gpt-5.4/RUN_ID
+
+find "$RUN_DIR/env_log/preds" -type f
+find "$RUN_DIR/env_log/veritas" -name scheduler_next_action.json -o -name agent_feedback.txt
+```

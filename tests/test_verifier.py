@@ -47,6 +47,7 @@ from veritas.verifier.unit_outputs import (
     recompute_mean_score,
     recompute_score_check,
 )
+from scripts.apply_mlrc_veritas_hook_patch import patch_low_level_actions
 
 
 def test_canonical_enum_values_match_docs():
@@ -956,6 +957,30 @@ def test_mlrc_verifier_hook_cli_writes_action_and_feedback(tmp_path):
     assert "cand_better" in feedback
 
 
+def test_mlrc_veritas_hook_patcher_handles_clean_low_level_actions(tmp_path):
+    target = tmp_path / "low_level_actions.py"
+    target.write_text(_low_level_actions_fixture(manual_pythonpath=False), encoding="utf-8")
+
+    assert patch_low_level_actions(target) is True
+    patched = target.read_text(encoding="utf-8")
+    assert "_maybe_run_veritas_hook" in patched
+    assert "VERITAS_HOOK_ENABLE" in patched
+    assert "repo_root = os.path.abspath" in patched
+    assert "veritas_observation = _maybe_run_veritas_hook" in patched
+    assert patch_low_level_actions(target) is False
+
+
+def test_mlrc_veritas_hook_patcher_handles_manual_pythonpath_fix(tmp_path):
+    target = tmp_path / "low_level_actions.py"
+    target.write_text(_low_level_actions_fixture(manual_pythonpath=True), encoding="utf-8")
+
+    assert patch_low_level_actions(target) is True
+    patched = target.read_text(encoding="utf-8")
+    assert "_maybe_run_veritas_hook" in patched
+    assert patched.count("repo_root = os.path.abspath") == 1
+    assert "PYTHONPATH={repo_root}:`pwd`" in patched
+
+
 def test_mlrc_task_adapter_rejects_unsupported_task(tmp_path):
     specs_path = tmp_path / "candidate_specs.jsonl"
     labels_path = tmp_path / "labels.csv"
@@ -1027,3 +1052,46 @@ def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _low_level_actions_fixture(*, manual_pythonpath: bool) -> str:
+    if manual_pythonpath:
+        command_block = (
+            '        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))\n'
+            '        cmd = f"PYTHONPATH={repo_root}:`pwd`:${PYTHONPATH:-} CUDA_VISIBLE_DEVICES={device} {python} -u {script_path}"\n'
+        )
+    else:
+        command_block = (
+            '        cmd = f"PYTHONPATH=`pwd` CUDA_VISIBLE_DEVICES={device} {python} -u {script_path}"\n'
+        )
+    return (
+        '"""fixture"""\n'
+        "import os\n"
+        "import json\n"
+        "import subprocess\n"
+        "import selectors\n"
+        "import shutil\n"
+        "import glob\n"
+        "import sys\n"
+        "import inspect\n"
+        "\n"
+        "def safe_copy_file(src, dst):\n"
+        "    shutil.copyfile(src, dst)\n"
+        "\n\n"
+        '# @check_file_in_work_dir(["script_name_and_args"])\n'
+        "def execute_script(script_name_and_args, work_dir = \".\", **kwargs):\n"
+        "    try:\n"
+        "        script_path = script_name_and_args\n"
+        "        device = kwargs[\"device\"]\n"
+        "        python = kwargs[\"python\"]\n"
+        f"{command_block}"
+        "        return_code = 0\n"
+        "        observation = \"\"\n"
+        "        stderr_lines = []\n"
+        "        if observation == \"\" and return_code == 0:\n"
+        "            # printed to stderr only\n"
+        "            observation = \"\".join(stderr_lines)\n"
+        "        return \"The script has been executed. Here is the output:\\n\" + observation\n"
+        "    except Exception:\n"
+        "        raise\n"
+    )
