@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--epsilon",
         type=float,
-        default=0.005,
+        default=0.01,
         help="Minimum meaningful positive delta.",
     )
     parser.add_argument(

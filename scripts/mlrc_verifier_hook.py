@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
         choices=["parsed_mrr", "mlrc_exact"],
         default="parsed_mrr",
     )
-    parser.add_argument("--epsilon", type=float, default=0.005)
+    parser.add_argument("--epsilon", type=float, default=0.01)
     parser.add_argument("--bootstrap-samples", type=int, default=200)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(

@@ -88,7 +88,7 @@ python3 scripts/validate_verifier.py \
   --labels-path ~/work/MLRC-Bench/MLAgentBench/benchmarks/product-recommendation/env/data/dev_labels.csv \
   --incumbent-id baseline \
   --product-recommendation-metric parsed_mrr \
-  --epsilon 0.005 \
+  --epsilon 0.01 \
   --bootstrap-samples 2000 \
   --seed 0
 ```
@@ -116,7 +116,7 @@ python scripts/audit_mlrc_product_run.py \
   --run-dir ~/work/MLRC-Bench/logs/product-recommendation/gpt-5.4/RUN_ID \
   --task-python ~/miniconda3/envs/product-recommendation/bin/python \
   --bootstrap-samples 200 \
-  --epsilon 0.005
+  --epsilon 0.01
 ```
 
 The main outputs are:
@@ -146,15 +146,16 @@ python scripts/mlrc_verifier_hook.py \
   --candidate-id CANDIDATE_ID \
   --candidate-method CANDIDATE_METHOD \
   --bootstrap-samples 200 \
-  --epsilon 0.005
+  --epsilon 0.01
 ```
 
 ## Enable The MLRC Online Hook
 
 This is the minimal in-run integration for product-recommendation. It preserves
 each successful dev `pred.csv` and, once a baseline prediction exists, runs the
-VeriTAS hook after candidate dev evaluations. Hook failures are logged and MLRC
-continues.
+VeriTAS hook after candidate dev evaluations. With `VERITAS_HOOK_STEER=1`, the
+hook also appends concise verifier feedback to the agent's script observation.
+Hook failures are logged and MLRC continues.
 
 Apply the patch after the GPT patch:
 
@@ -170,9 +171,10 @@ cd ~/work/MLRC-Bench
 conda activate mlab
 
 export VERITAS_HOOK_ENABLE=1
+export VERITAS_HOOK_STEER=1
 export VERITAS_REPO_DIR=~/work/VeriTAS
 export VERITAS_HOOK_BOOTSTRAP_SAMPLES=50
-export VERITAS_HOOK_EPSILON=0.005
+export VERITAS_HOOK_EPSILON=0.01
 export VERITAS_HOOK_TIMEOUT=300
 
 bash launch.sh product-recommendation gpt-5.4 0 TEST_MODEL

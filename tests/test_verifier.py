@@ -30,6 +30,7 @@ from veritas.verifier.mlrc_tasks import (
     product_recommendation_unit_outputs,
 )
 from veritas.verifier.mlrc_workflows import (
+    build_agent_feedback,
     select_best_dev_implementation,
     write_product_candidate_specs,
 )
@@ -957,6 +958,41 @@ def test_mlrc_verifier_hook_cli_writes_action_and_feedback(tmp_path):
     assert "cand_better" in feedback
 
 
+@pytest.mark.parametrize(
+    ("action_type", "expected_text"),
+    [
+        ("final_audit", "clears the verifier evidence gate"),
+        ("rerun_candidate", "gain looks positive but unresolved"),
+        ("stop_unresolved", "Do not finalize this candidate"),
+    ],
+)
+def test_agent_feedback_includes_action_specific_steering(action_type, expected_text):
+    feedback = build_agent_feedback(
+        {
+            "recommended_action": {
+                "type": action_type,
+                "candidate_id": "cand_001",
+                "reason": "test reason",
+            },
+            "candidates": [
+                {
+                    "candidate_id": "cand_001",
+                    "raw_delta": 0.02,
+                    "paired_delta": 0.021,
+                    "paired_se": 0.003,
+                    "dev_resolution_ratio": 4.0,
+                    "decision": action_type,
+                }
+            ],
+        },
+        {"type": action_type, "candidate_id": "cand_001", "reason": "test reason"},
+    )
+
+    assert "- steering:" in feedback
+    assert expected_text in feedback
+    assert "Use this as verifier evidence; do not treat it as a new benchmark score." in feedback
+
+
 def test_mlrc_veritas_hook_patcher_handles_clean_low_level_actions(tmp_path):
     target = tmp_path / "low_level_actions.py"
     target.write_text(_low_level_actions_fixture(manual_pythonpath=False), encoding="utf-8")
@@ -964,7 +1000,11 @@ def test_mlrc_veritas_hook_patcher_handles_clean_low_level_actions(tmp_path):
     assert patch_low_level_actions(target) is True
     patched = target.read_text(encoding="utf-8")
     assert "_maybe_run_veritas_hook" in patched
+    assert 'VERITAS_HOOK_PATCH_VERSION = "2_steering"' in patched
     assert "VERITAS_HOOK_ENABLE" in patched
+    assert "VERITAS_HOOK_STEER" in patched
+    assert "agent_feedback.txt" in patched
+    assert 'os.getenv("VERITAS_HOOK_EPSILON", "0.01")' in patched
     assert "repo_root = os.path.abspath" in patched
     assert "veritas_observation = _maybe_run_veritas_hook" in patched
     assert patch_low_level_actions(target) is False
@@ -979,6 +1019,37 @@ def test_mlrc_veritas_hook_patcher_handles_manual_pythonpath_fix(tmp_path):
     assert "_maybe_run_veritas_hook" in patched
     assert patched.count("repo_root = os.path.abspath") == 1
     assert "PYTHONPATH={repo_root}:`pwd`" in patched
+
+
+def test_mlrc_veritas_hook_patcher_upgrades_passive_hook(tmp_path):
+    target = tmp_path / "low_level_actions.py"
+    target.write_text(_low_level_actions_fixture(manual_pythonpath=False), encoding="utf-8")
+
+    passive = patch_low_level_actions(target)
+    assert passive is True
+
+    old_style = target.read_text(encoding="utf-8").replace(
+        'VERITAS_HOOK_PATCH_VERSION = "2_steering"\n\n\n',
+        "",
+    ).replace(
+        "\n\ndef _veritas_hook_steering_enabled():\n"
+        '    return os.getenv("VERITAS_HOOK_STEER", "").strip().lower() in {"1", "true", "yes", "on"}\n',
+        "",
+    ).replace(
+        '\n    if _veritas_hook_steering_enabled():\n'
+        '        feedback = _read_veritas_agent_feedback(hook_ledger_dir)\n'
+        '        if feedback:\n'
+        '            return feedback\n'
+        '        return f"VeriTAS hook: verifier succeeded but no agent feedback was found at {hook_ledger_dir}"\n',
+        "\n",
+    )
+    target.write_text(old_style, encoding="utf-8")
+
+    assert patch_low_level_actions(target) is True
+    upgraded = target.read_text(encoding="utf-8")
+    assert 'VERITAS_HOOK_PATCH_VERSION = "2_steering"' in upgraded
+    assert "VERITAS_HOOK_STEER" in upgraded
+    assert "agent_feedback.txt" in upgraded
 
 
 def test_mlrc_task_adapter_rejects_unsupported_task(tmp_path):

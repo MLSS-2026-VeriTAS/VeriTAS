@@ -7,11 +7,19 @@ import argparse
 from pathlib import Path
 
 
-HELPER_MARKER = "VERITAS_HOOK_ENABLE"
+HELPER_MARKER = 'VERITAS_HOOK_PATCH_VERSION = "2_steering"'
+HOOK_FUNCTION = "_maybe_run_veritas_hook"
 
 HELPERS = r'''
+VERITAS_HOOK_PATCH_VERSION = "2_steering"
+
+
 def _veritas_hook_enabled():
     return os.getenv("VERITAS_HOOK_ENABLE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _veritas_hook_steering_enabled():
+    return os.getenv("VERITAS_HOOK_STEER", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _safe_veritas_name(value):
@@ -63,6 +71,17 @@ def _write_veritas_hook_error(ledger_dir, message):
     os.makedirs(ledger_dir, exist_ok=True)
     with open(os.path.join(ledger_dir, "hook_error.txt"), "a", encoding="utf-8") as writer:
         writer.write(str(message).rstrip() + "\n")
+
+
+def _read_veritas_agent_feedback(hook_ledger_dir):
+    feedback_path = os.path.join(hook_ledger_dir, "agent_feedback.txt")
+    if not os.path.exists(feedback_path):
+        return ""
+    with open(feedback_path, "r", encoding="utf-8") as reader:
+        feedback = reader.read().strip()
+    if not feedback:
+        return ""
+    return "[VeriTAS steering feedback]\n" + feedback
 
 
 def _maybe_run_veritas_hook(script_name_and_args, work_dir, return_code, log_file):
@@ -136,7 +155,7 @@ def _maybe_run_veritas_hook(script_name_and_args, work_dir, return_code, log_fil
         "--metric",
         os.getenv("VERITAS_HOOK_METRIC", "parsed_mrr"),
         "--epsilon",
-        os.getenv("VERITAS_HOOK_EPSILON", "0.005"),
+        os.getenv("VERITAS_HOOK_EPSILON", "0.01"),
         "--bootstrap-samples",
         os.getenv("VERITAS_HOOK_BOOTSTRAP_SAMPLES", "50"),
         "--seed",
@@ -169,6 +188,11 @@ def _maybe_run_veritas_hook(script_name_and_args, work_dir, return_code, log_fil
         _write_veritas_hook_error(hook_ledger_dir, repr(exc))
         return f"VeriTAS hook failed for {method_name}; MLRC continues."
 
+    if _veritas_hook_steering_enabled():
+        feedback = _read_veritas_agent_feedback(hook_ledger_dir)
+        if feedback:
+            return feedback
+        return f"VeriTAS hook: verifier succeeded but no agent feedback was found at {hook_ledger_dir}"
     return f"VeriTAS hook: wrote verifier artifacts to {hook_ledger_dir}"
 
 
@@ -177,12 +201,17 @@ def _maybe_run_veritas_hook(script_name_and_args, work_dir, return_code, log_fil
 
 def patch_low_level_actions(path: Path) -> bool:
     source = path.read_text(encoding="utf-8")
-    if "_maybe_run_veritas_hook" in source:
+    if HELPER_MARKER in source:
         return False
 
     patched = source
     if "import shlex\n" not in patched:
         patched = patched.replace("import inspect\n", "import inspect\nimport shlex\n", 1)
+
+    if HOOK_FUNCTION in patched:
+        patched = _replace_existing_hook_helpers(patched)
+        path.write_text(patched, encoding="utf-8")
+        return True
 
     insert_anchor = "\n\n# @check_file_in_work_dir([\"script_name_and_args\"])\n"
     if insert_anchor not in patched:
@@ -218,6 +247,16 @@ def patch_low_level_actions(path: Path) -> bool:
 
     path.write_text(patched, encoding="utf-8")
     return True
+
+
+def _replace_existing_hook_helpers(source: str) -> str:
+    helper_start = source.find("\ndef _veritas_hook_enabled():")
+    if helper_start == -1:
+        helper_start = source.find("def _veritas_hook_enabled():")
+    anchor = source.find("# @check_file_in_work_dir([\"script_name_and_args\"])")
+    if helper_start == -1 or anchor == -1:
+        raise RuntimeError("could not locate existing VeriTAS hook helper block")
+    return source[:helper_start].rstrip() + "\n\n" + HELPERS + source[anchor:]
 
 
 def parse_args() -> argparse.Namespace:

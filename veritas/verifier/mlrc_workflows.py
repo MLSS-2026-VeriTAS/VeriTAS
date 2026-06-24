@@ -113,7 +113,7 @@ def run_product_recommendation_verifier(
     labels_path: str | Path,
     incumbent_id: str = "baseline",
     metric_variant: str = "parsed_mrr",
-    epsilon: float = 0.005,
+    epsilon: float = 0.01,
     bootstrap_samples: int = 200,
     seed: int = 0,
 ) -> tuple[dict[str, Any], dict[str, Any], Any]:
@@ -147,11 +147,15 @@ def build_agent_feedback(verifier_report: dict[str, Any], scheduler_action: dict
 
     recommended = verifier_report.get("recommended_action", {})
     candidate = _top_candidate(verifier_report)
+    action_type = scheduler_action.get("type") or recommended.get("type")
     lines = [
         "Verifier decision:",
-        f"- action: {scheduler_action.get('type') or recommended.get('type')}",
+        f"- action: {action_type}",
         f"- reason: {scheduler_action.get('reason') or recommended.get('reason')}",
     ]
+    instruction = _agent_instruction_for_action(action_type)
+    if instruction:
+        lines.append(f"- steering: {instruction}")
     candidate_id = scheduler_action.get("candidate_id") or recommended.get("candidate_id")
     if candidate_id:
         lines.append(f"- candidate_id: {candidate_id}")
@@ -177,7 +181,7 @@ def audit_completed_product_run(
     run_dir: str | Path,
     trial_dir: str | Path,
     task_python: str | Path,
-    epsilon: float = 0.005,
+    epsilon: float = 0.01,
     bootstrap_samples: int = 200,
     seed: int = 0,
     metric_variant: str = "parsed_mrr",
@@ -275,6 +279,30 @@ def _top_candidate(report: dict[str, Any]) -> dict[str, Any] | None:
         return None
     first = candidates[0]
     return first if isinstance(first, dict) else None
+
+
+def _agent_instruction_for_action(action_type: Any) -> str:
+    if action_type == "final_audit":
+        return (
+            "This candidate clears the verifier evidence gate; preserve it for "
+            "final audit unless you have a stronger planned candidate."
+        )
+    if action_type == "rerun_candidate":
+        return (
+            "The gain looks positive but unresolved; rerun this method or a "
+            "nearby variant before finalizing."
+        )
+    if action_type == "stop_unresolved":
+        return (
+            "Do not finalize this candidate from current evidence; try a "
+            "materially different method or a larger effect."
+        )
+    if action_type in {"request_nearby_variants", "request_diverse_cards"}:
+        return (
+            "Continue search, but use the verifier deltas and uncertainty to "
+            "avoid small or noisy variants."
+        )
+    return "Use this evidence to decide whether to finalize, rerun, or change direction."
 
 
 def _materialize_eval_env(*, source_env: Path, target_env: Path, data_source: Path) -> Path:
