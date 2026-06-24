@@ -29,6 +29,10 @@ from veritas.verifier.mlrc_tasks import (
     prepare_mlrc_task_ledger,
     product_recommendation_unit_outputs,
 )
+from veritas.verifier.mlrc_workflows import (
+    select_best_dev_implementation,
+    write_product_candidate_specs,
+)
 from veritas.verifier.model import (
     cluster_effective_candidates,
     estimate_eb_parameters,
@@ -837,6 +841,119 @@ def test_product_recommendation_cli_prepares_and_runs_per_unit_detector(tmp_path
     assert report["detector_mode"] == "per_unit_bootstrap_ok"
     assert report["candidates"][0]["candidate_id"] == "cand_better"
     assert read_jsonl(ledger_dir / "unit_outputs" / "cand_better.jsonl")[0]["unit_type"] == "session"
+
+
+def test_mlrc_workflow_selects_best_dev_and_writes_specs(tmp_path):
+    idea_evals_path = tmp_path / "idea_evals.json"
+    baseline_path = tmp_path / "preds" / "baseline.csv"
+    candidate_path = tmp_path / "preds" / "candidate.csv"
+    specs_path = tmp_path / "candidate_specs.jsonl"
+
+    write_json(
+        idea_evals_path,
+        {
+            "implementations": [
+                {"step": 2, "method_name": "weak_method", "phase": "dev", "performance": 0.2},
+                {"step": 4, "method_name": "best_method", "phase": "dev", "performance": 0.4},
+                {"step": 5, "method_name": "test_method", "phase": "test", "performance": 0.5},
+            ]
+        },
+    )
+    baseline_path.parent.mkdir(parents=True)
+    baseline_path.write_text("next_item_prediction\n['a']\n", encoding="utf-8")
+    candidate_path.write_text("next_item_prediction\n['b']\n", encoding="utf-8")
+
+    best = select_best_dev_implementation(idea_evals_path)
+    assert best.step == 4
+    assert best.method_name == "best_method"
+    assert best.performance == pytest.approx(0.4)
+
+    write_product_candidate_specs(
+        specs_path,
+        baseline_prediction_path=baseline_path,
+        candidate_prediction_path=candidate_path,
+        candidate_method_name=best.method_name,
+        candidate_step=best.step,
+        run_id="run_001",
+    )
+    rows = read_jsonl(specs_path)
+    assert rows[0]["candidate_id"] == "baseline"
+    assert rows[0]["is_incumbent"] is True
+    assert rows[1]["candidate_id"] == "best_dev"
+    assert rows[1]["method_name"] == "best_method"
+    assert rows[1]["step"] == 4
+
+
+def test_mlrc_verifier_hook_cli_writes_action_and_feedback(tmp_path):
+    labels_path = tmp_path / "labels.csv"
+    baseline_path = tmp_path / "baseline_pred.csv"
+    candidate_path = tmp_path / "candidate_pred.csv"
+    ledger_dir = tmp_path / "ledger"
+
+    _write_csv(
+        labels_path,
+        [
+            {"session_id": f"s{i}", "next_item": target}
+            for i, target in enumerate(["a", "b", "c", "d", "e", "f"], start=1)
+        ],
+    )
+    _write_csv(
+        baseline_path,
+        [
+            {"session_id": "s1", "locale": "US", "next_item_prediction": "['x', 'a']"},
+            {"session_id": "s2", "locale": "US", "next_item_prediction": "['x', 'b']"},
+            {"session_id": "s3", "locale": "US", "next_item_prediction": "['x', 'c']"},
+            {"session_id": "s4", "locale": "US", "next_item_prediction": "['q']"},
+            {"session_id": "s5", "locale": "US", "next_item_prediction": "['q']"},
+            {"session_id": "s6", "locale": "US", "next_item_prediction": "['q']"},
+        ],
+    )
+    _write_csv(
+        candidate_path,
+        [
+            {"session_id": "s1", "locale": "US", "next_item_prediction": "['a']"},
+            {"session_id": "s2", "locale": "US", "next_item_prediction": "['b']"},
+            {"session_id": "s3", "locale": "US", "next_item_prediction": "['c']"},
+            {"session_id": "s4", "locale": "US", "next_item_prediction": "['d']"},
+            {"session_id": "s5", "locale": "US", "next_item_prediction": "['e']"},
+            {"session_id": "s6", "locale": "US", "next_item_prediction": "['f']"},
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/mlrc_verifier_hook.py",
+            "--ledger-dir",
+            str(ledger_dir),
+            "--baseline-pred",
+            str(baseline_path),
+            "--candidate-pred",
+            str(candidate_path),
+            "--labels-path",
+            str(labels_path),
+            "--candidate-id",
+            "cand_better",
+            "--candidate-method",
+            "better_method",
+            "--bootstrap-samples",
+            "50",
+            "--epsilon",
+            "0.05",
+        ],
+        cwd=Path.cwd(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads((ledger_dir / "hook_summary.json").read_text())
+    feedback = (ledger_dir / "agent_feedback.txt").read_text()
+    assert summary["recommended_action"]["candidate_id"] == "cand_better"
+    assert summary["scheduler_next_action"]["type"] in {"final_audit", "stop_unresolved", "rerun_candidate"}
+    assert "Verifier decision:" in feedback
+    assert "cand_better" in feedback
 
 
 def test_mlrc_task_adapter_rejects_unsupported_task(tmp_path):

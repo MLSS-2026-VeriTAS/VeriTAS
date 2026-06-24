@@ -99,3 +99,52 @@ The stable integration boundary is artifact-based:
 MLRC-Bench -> pred.csv / idea_evals.json / logs
 VeriTAS -> unit_outputs / candidates / verifier_report / scheduler action
 ```
+
+## One-Command Completed-Run Audit
+
+For product-recommendation runs, use this wrapper after `launch.sh` finishes.
+It selects the best dev snapshot from MLRC's `idea_evals.json`, regenerates
+baseline and candidate `pred.csv` files in an isolated trial directory, prepares
+the ledger, runs VeriTAS, and writes `audit_summary.json`.
+
+```bash
+cd ~/work/VeriTAS
+conda activate mlab
+
+python scripts/audit_mlrc_product_run.py \
+  --mlrc-dir ~/work/MLRC-Bench \
+  --run-dir ~/work/MLRC-Bench/logs/product-recommendation/gpt-5.4/RUN_ID \
+  --task-python ~/miniconda3/envs/product-recommendation/bin/python \
+  --bootstrap-samples 200 \
+  --epsilon 0.005
+```
+
+The main outputs are:
+
+```text
+~/work/trials/product-recommendation/RUN_ID/preds/
+~/work/trials/product-recommendation/RUN_ID/ledger/verifier_report.json
+~/work/trials/product-recommendation/RUN_ID/ledger/scheduler_next_action.json
+~/work/trials/product-recommendation/RUN_ID/ledger/agent_feedback.txt
+```
+
+## Verifier Hook From Existing Predictions
+
+Use this when a baseline `pred.csv` and candidate `pred.csv` already exist. It
+is the smallest online-control boundary: MLRC can call it after a candidate dev
+evaluation, then read `agent_feedback.txt` or `scheduler_next_action.json`.
+
+```bash
+cd ~/work/VeriTAS
+conda activate mlab
+
+python scripts/mlrc_verifier_hook.py \
+  --ledger-dir ~/work/trials/product-recommendation/RUN_ID/hook_ledger \
+  --baseline-pred ~/work/trials/product-recommendation/RUN_ID/preds/baseline.csv \
+  --candidate-pred ~/work/trials/product-recommendation/RUN_ID/preds/CANDIDATE.csv \
+  --labels-path ~/work/MLRC-Bench/MLAgentBench/benchmarks/product-recommendation/env/data/dev_labels.csv \
+  --candidate-id CANDIDATE_ID \
+  --candidate-method CANDIDATE_METHOD \
+  --bootstrap-samples 200 \
+  --epsilon 0.005
+```
