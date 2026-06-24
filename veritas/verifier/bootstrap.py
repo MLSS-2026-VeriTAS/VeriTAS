@@ -15,6 +15,7 @@ def paired_bootstrap(
     *,
     incumbent_rows: list[dict[str, Any]],
     candidate_rows_by_id: dict[str, list[dict[str, Any]]],
+    score_direction: str,
     samples: int = 1000,
     seed: int = 0,
     group_field: str | None = None,
@@ -23,6 +24,10 @@ def paired_bootstrap(
         raise ValueError("paired bootstrap requires at least two samples")
     if not candidate_rows_by_id:
         raise ValueError("paired bootstrap requires at least one candidate")
+    if score_direction not in {"maximize", "minimize"}:
+        raise ValueError(f"invalid score direction: {score_direction}")
+
+    direction_multiplier = 1.0 if score_direction == "maximize" else -1.0
 
     incumbent_by_id = index_unit_outputs(incumbent_rows)
     candidate_by_id = {
@@ -51,7 +56,8 @@ def paired_bootstrap(
                 candidate_by_id[candidate_id][unit_id]
                 for unit_id in sampled_units
             ]
-            row.append(recompute_mean_score(candidate_sample) - incumbent_score)
+            raw_delta = recompute_mean_score(candidate_sample) - incumbent_score
+            row.append(direction_multiplier * raw_delta)
         bootstrap_deltas.append(row)
 
     means = _column_means(bootstrap_deltas)

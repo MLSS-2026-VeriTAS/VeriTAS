@@ -403,6 +403,7 @@ def test_paired_bootstrap_produces_covariance_for_aligned_units():
     result = paired_bootstrap(
         incumbent_rows=incumbent,
         candidate_rows_by_id={"cand_a": candidate_a, "cand_b": candidate_b},
+        score_direction="maximize",
         samples=200,
         seed=123,
     )
@@ -422,8 +423,29 @@ def test_paired_bootstrap_rejects_unaligned_candidate_units():
         paired_bootstrap(
             incumbent_rows=incumbent,
             candidate_rows_by_id={"cand": candidate},
+            score_direction="maximize",
             samples=10,
         )
+
+
+def test_paired_bootstrap_respects_minimize_direction():
+    incumbent = [
+        {"unit_id": "u1", "score_component": 0.5},
+        {"unit_id": "u2", "score_component": 0.5},
+    ]
+    candidate = [
+        {"unit_id": "u1", "score_component": 0.4},
+        {"unit_id": "u2", "score_component": 0.4},
+    ]
+
+    result = paired_bootstrap(
+        incumbent_rows=incumbent,
+        candidate_rows_by_id={"candidate": candidate},
+        score_direction="minimize",
+        samples=20,
+    )
+
+    assert result.delta_hat["candidate"] == pytest.approx(0.1)
 
 
 def test_eb_clustering_and_ranking_guards_tiny_pools():

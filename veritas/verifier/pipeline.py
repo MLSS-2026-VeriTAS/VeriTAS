@@ -99,11 +99,17 @@ def build_per_unit_report(
         for candidate in non_incumbents
     }
 
+    score_directions = {candidate.score_direction for candidate in candidates}
+    if len(score_directions) != 1:
+        raise ValueError("all candidates must use the same score direction")
+    score_direction = score_directions.pop()
+
     _check_recomputed_scores(candidates, incumbent, incumbent_rows, candidate_rows_by_id)
 
     bootstrap = paired_bootstrap(
         incumbent_rows=incumbent_rows,
         candidate_rows_by_id=candidate_rows_by_id,
+        score_direction=score_direction,
         samples=bootstrap_samples,
         seed=seed,
     )
