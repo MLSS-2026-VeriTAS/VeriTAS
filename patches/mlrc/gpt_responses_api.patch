@@ -295,7 +295,7 @@ index a68eb44..965212f 100644
      MAX_RETRYS = 3
  
 diff --git a/launch.sh b/launch.sh
-index 63720bd..67a2655 100644
+index 63720bd..8ee443c 100644
 --- a/launch.sh
 +++ b/launch.sh
 @@ -4,10 +4,11 @@ source ~/.bashrc
@@ -311,7 +311,19 @@ index 63720bd..67a2655 100644
  
  if [[ "${TASK_ENV}" == "weather_forcast" ]]; then
  	MAX_HOURS=10
-@@ -59,7 +60,7 @@ nohup python -u -m MLAgentBench.runner \
+@@ -20,7 +21,10 @@ else
+ fi
+ 
+ # ANCHORS=("ties" "dare" "emrmerging")
+-PYTHON_PATH="/home/yunxiang/.conda/envs/${TASK_ENV}/bin/python"
++PYTHON_PATH="${HOME}/miniconda3/envs/${TASK_ENV}/bin/python"
++if [[ ! -x "${PYTHON_PATH}" ]]; then
++	PYTHON_PATH="$(which python)"
++fi
+ 
+ if [ "$OPTION" ]; then
+ 	TASK=${TASK_ENV}--${OPTION}--${IDEA_PROPOSAL_MODEL}
+@@ -59,7 +63,7 @@ nohup python -u -m MLAgentBench.runner \
  	--work-dir ${WORKSPACE_DIR} \
  	--llm-name ${MODEL} \
  	--edit-script-llm-name ${MODEL} \

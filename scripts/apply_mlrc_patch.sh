@@ -50,6 +50,11 @@ if ! grep -q "openai_client_kind" "${MLRC_DIR}/MLAgentBench/LLM.py"; then
   exit 1
 fi
 
+if grep -q 'yunxiang' "${MLRC_DIR}/launch.sh"; then
+  echo "Patch verification failed: launch.sh still contains the hardcoded yunxiang path." >&2
+  exit 1
+fi
+
 echo "Patch applied. Current MLRC GPT defaults:"
 grep -R "gpt-5.4-mini" \
   MLAgentBench/LLM.py \

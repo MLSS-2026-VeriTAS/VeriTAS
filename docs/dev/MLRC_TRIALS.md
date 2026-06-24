@@ -28,6 +28,10 @@ bash scripts/apply_mlrc_patch.sh ../MLRC-Bench
 
 The script is idempotent. If the patch is already applied, it exits cleanly.
 
+The patch also replaces MLRC's hardcoded author Python path in `launch.sh`
+(`/home/yunxiang/...`) with a portable `${HOME}/miniconda3/...` lookup and
+fallback to `which python`.
+
 ## Required API Environment
 
 For current GPT models, use the public OpenAI API path:
