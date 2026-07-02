@@ -1,146 +1,154 @@
-"""Closed-form Bayesian machinery for the VeriTAS Verifier.
-
-The Verifier treats each agent iteration as a noisy experiment and reasons
-about the latent (noise-free) performance of methods with a conjugate
-Normal-Inverse-Gamma (NIG) model. This module provides the small set of
-closed-form primitives used by ``verifier.py``:
-
-* ``nig_update``        - conjugate posterior update from noisy scores.
-* ``student_t_marginal`` - the Student-t marginal posterior over the mean.
-* ``gaussian_moments``  - mean/variance of that Student-t (for tractable
-                           differences and KL).
-* ``probability_of_improvement`` / ``expected_improvement`` - acquisition
-                           quantities over the improvement ``Delta_t``.
-* ``kl_gaussian``       - KL between two Gaussians.
-* ``improvement_information`` - the one-sided validated information gain:
-                           evidence that ``Delta_t`` exceeds zero (positive-only
-                           KL-style score against the null).
-
-Everything here is pure (no I/O, no global state) and unit-tested against
-hand-computed values.
-"""
+"""Minimal EB ranking helpers for verifier candidates."""
 
 from __future__ import annotations
 
 import math
-from typing import Sequence, Tuple
+from collections import defaultdict
 
-from scipy.stats import norm
-
-from .config import NIGPrior
-from .types import PosteriorSummary
-
-SQRT_2PI = math.sqrt(2.0 * math.pi)
+from veritas.verifier.types import CandidateEvidence, EffectiveCandidate
 
 
-def nig_update(prior: NIGPrior, scores: Sequence[float]) -> NIGPrior:
-    """Return the NIG posterior after observing ``scores``.
-
-    Uses the standard conjugate update for a Gaussian likelihood with unknown
-    mean and variance. ``scores`` must contain at least one value.
-    """
-    n = len(scores)
-    if n == 0:
-        raise ValueError("nig_update requires at least one observation.")
-
-    ybar = sum(scores) / n
-    ss = sum((y - ybar) ** 2 for y in scores)  # sum of squared deviations
-
-    lam_n = prior.lam + n
-    mu_n = (prior.lam * prior.mu + n * ybar) / lam_n
-    alpha_n = prior.alpha + n / 2.0
-    beta_n = (
-        prior.beta
-        + 0.5 * ss
-        + 0.5 * (prior.lam * n / lam_n) * (ybar - prior.mu) ** 2
-    )
-    return NIGPrior(mu=mu_n, lam=lam_n, alpha=alpha_n, beta=beta_n)
+TAU2_FLOOR = 1e-12
 
 
-def student_t_marginal(posterior: NIGPrior) -> PosteriorSummary:
-    """Student-t marginal posterior over the mean ``theta``.
+def cluster_effective_candidates(
+    evidences: list[CandidateEvidence],
+) -> list[EffectiveCandidate]:
+    grouped: dict[str, list[CandidateEvidence]] = defaultdict(list)
+    for evidence in evidences:
+        grouped[evidence.logical_candidate_id].append(evidence)
 
-    Under the NIG posterior, ``theta ~ t_{2 alpha}(mu, beta / (lam * alpha))``.
-    """
-    dof = 2.0 * posterior.alpha
-    scale = math.sqrt(posterior.beta / (posterior.lam * posterior.alpha))
-    return PosteriorSummary(mean=posterior.mu, scale=scale, dof=dof)
+    effective: list[EffectiveCandidate] = []
+    for cluster_id, members in sorted(grouped.items()):
+        if len(members) == 1:
+            member = members[0]
+            effective.append(
+                EffectiveCandidate(
+                    cluster_id=cluster_id,
+                    member_ids=[member.candidate_id],
+                    delta_hat=member.delta_hat,
+                    total_se=member.total_se,
+                )
+            )
+            continue
 
+        valid_se = all(member.total_se > 0 for member in members)
+        flags = ["near_duplicate_cluster"]
+        if valid_se:
+            weights = [1.0 / (member.total_se**2) for member in members]
+            delta_hat = sum(
+                weight * member.delta_hat
+                for weight, member in zip(weights, members, strict=True)
+            ) / sum(weights)
+            base_var = 1.0 / sum(weights)
+        else:
+            flags.append("low_information_cluster_estimate")
+            delta_hat = sum(member.delta_hat for member in members) / len(members)
+            base_var = _mean([member.total_se**2 for member in members])
 
-def expected_noise_std(posterior: NIGPrior) -> float:
-    """Posterior mean of the measurement-noise standard deviation.
+        spread = _sample_variance([member.delta_hat for member in members])
+        effective.append(
+            EffectiveCandidate(
+                cluster_id=cluster_id,
+                member_ids=[member.candidate_id for member in members],
+                delta_hat=delta_hat,
+                total_se=math.sqrt(max(base_var + spread, 0.0)),
+                flags=flags,
+            )
+        )
 
-    Under the Inverse-Gamma posterior on ``sigma^2``, ``E[sigma^2] = beta /
-    (alpha - 1)`` for ``alpha > 1``. A candidate whose seeds disagree (for
-    example, one lucky outlier) yields a large inferred noise, which the
-    Verifier uses to raise the bar for crediting an improvement.
-    """
-    if posterior.alpha > 1.0:
-        return math.sqrt(posterior.beta / (posterior.alpha - 1.0))
-    return math.sqrt(posterior.beta)
-
-
-def gaussian_moments(summary: PosteriorSummary, min_variance: float = 1e-9) -> Tuple[float, float]:
-    """Mean and variance of a Student-t marginal.
-
-    For ``dof > 2`` the variance is ``scale^2 * dof / (dof - 2)``. ``alpha >= 1``
-    in our priors guarantees ``dof > 2``; the fallback only guards pathological
-    inputs.
-    """
-    mean = summary.mean
-    if summary.dof > 2.0:
-        var = summary.scale ** 2 * summary.dof / (summary.dof - 2.0)
-    else:
-        var = summary.scale ** 2 * 50.0  # heavy-tailed guard; keep finite
-    return mean, max(var, min_variance)
-
-
-def probability_of_improvement(
-    delta_mean: float, delta_var: float, eps_min: float, min_variance: float = 1e-9
-) -> float:
-    """Posterior probability that the improvement exceeds ``eps_min``.
-
-    ``Delta_t`` is approximated as Gaussian; returns ``P(Delta_t > eps_min)``.
-    """
-    sigma = math.sqrt(max(delta_var, min_variance))
-    z = (delta_mean - eps_min) / sigma
-    return float(norm.cdf(z))
-
-
-def expected_improvement(
-    delta_mean: float, delta_var: float, min_variance: float = 1e-9
-) -> float:
-    """Posterior expected positive improvement ``E[max(Delta_t, 0)]``.
-
-    This is the classic Bayesian-optimization Expected Improvement acquisition
-    with the incumbent as the reference, computed in closed form for a Gaussian
-    ``Delta_t``.
-    """
-    sigma = math.sqrt(max(delta_var, min_variance))
-    z = delta_mean / sigma
-    return float(delta_mean * norm.cdf(z) + sigma * norm.pdf(z))
+    return effective
 
 
-def kl_gaussian(
-    m1: float, v1: float, m0: float, v0: float, min_variance: float = 1e-9
-) -> float:
-    """KL divergence ``KL(N(m1, v1) || N(m0, v0))`` in nats (non-negative)."""
-    v1 = max(v1, min_variance)
-    v0 = max(v0, min_variance)
-    kl = 0.5 * (math.log(v0 / v1) + (v1 + (m1 - m0) ** 2) / v0 - 1.0)
-    return max(kl, 0.0)
+def estimate_eb_parameters(
+    candidates: list[EffectiveCandidate],
+    *,
+    tau2_floor: float = TAU2_FLOOR,
+) -> dict:
+    if not candidates:
+        raise ValueError("EB parameter estimation requires candidates")
+
+    weights = [
+        1.0 / max(candidate.total_se**2, tau2_floor)
+        for candidate in candidates
+    ]
+    mu = sum(
+        weight * candidate.delta_hat
+        for weight, candidate in zip(weights, candidates, strict=True)
+    ) / sum(weights)
+
+    delta_variance = _sample_variance([candidate.delta_hat for candidate in candidates])
+    mean_se2 = _mean([candidate.total_se**2 for candidate in candidates])
+    tau2_raw = delta_variance - mean_se2
+    flags: list[str] = []
+    if tau2_raw <= 0:
+        flags.append("tau2_collapse")
+    if len(candidates) < 5:
+        flags.append("eb_ranking_only")
+
+    return {
+        "mu": mu,
+        "tau2_raw": tau2_raw,
+        "tau2": max(tau2_raw, tau2_floor),
+        "flags": flags,
+    }
 
 
-def improvement_information(
-    delta_mean: float, delta_var: float, min_variance: float = 1e-9
-) -> float:
-    """Validated information gain for positive improvement evidence (nats).
+def rank_candidates(
+    candidates: list[EffectiveCandidate],
+    *,
+    epsilon: float,
+    lambda_lower: float = 1.0,
+    lambda_upper: float = 1.0,
+    z_resolution: float = 2.0,
+    uncertainty_high_sd_multiplier: float = 1.0,
+) -> dict:
+    params = estimate_eb_parameters(candidates)
+    tau2 = params["tau2"]
+    reports = []
 
-    Defined as the KL divergence between the improvement posterior
-    ``N(delta_mean, delta_var)`` and the same posterior shifted to the
-    no-improvement null ``N(0, delta_var)``, but clipped to be one-sided:
-    regressions carry zero validated gain. For Gaussians this is
-    ``max(delta_mean, 0)^2 / (2 * delta_var)``.
-    """
-    positive_delta = max(delta_mean, 0.0)
-    return kl_gaussian(positive_delta, delta_var, 0.0, delta_var, min_variance)
+    for candidate in candidates:
+        se2 = candidate.total_se**2
+        weight = tau2 / (tau2 + se2) if tau2 + se2 > 0 else 0.0
+        posterior_mean = weight * candidate.delta_hat + (1.0 - weight) * params["mu"]
+        posterior_var = 1.0 / ((1.0 / max(se2, TAU2_FLOOR)) + (1.0 / tau2))
+        posterior_sd = math.sqrt(max(posterior_var, 0.0))
+        dev_resolution_ratio = epsilon / candidate.total_se if candidate.total_se > 0 else math.inf
+        uncertainty_high = posterior_sd > uncertainty_high_sd_multiplier * epsilon
+
+        reports.append(
+            {
+                "cluster_id": candidate.cluster_id,
+                "member_ids": candidate.member_ids,
+                "raw_delta": candidate.delta_hat,
+                "total_se": candidate.total_se,
+                "posterior_mean_delta": posterior_mean,
+                "posterior_sd": posterior_sd,
+                "lower_evidence_gain": posterior_mean - lambda_lower * posterior_sd,
+                "upper_evidence_gain": posterior_mean + lambda_upper * posterior_sd,
+                "dev_resolution_ratio": dev_resolution_ratio,
+                "dev_resolution_ok": dev_resolution_ratio >= z_resolution,
+                "uncertainty_high": uncertainty_high,
+                "flags": sorted(set(candidate.flags + params["flags"])),
+            }
+        )
+
+    reports.sort(key=lambda item: item["posterior_mean_delta"], reverse=True)
+    return {
+        "mu": params["mu"],
+        "tau2_raw": params["tau2_raw"],
+        "tau2": params["tau2"],
+        "flags": params["flags"],
+        "candidates": reports,
+    }
+
+
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _sample_variance(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean = _mean(values)
+    return sum((value - mean) ** 2 for value in values) / (len(values) - 1)

@@ -1,130 +1,135 @@
-"""Data structures exchanged with the VeriTAS Verifier.
-
-The Verifier observes a stream of agent iterations. Each iteration carries one
-or more *noisy* objective measurements of a candidate method's performance,
-together with optional natural-language artifacts (the method description and
-its code) and optional subjective rubric ratings produced by an
-LLM-as-a-Judge. The Verifier returns a structured result describing how much
-genuine, reproducible progress that iteration contributed.
-"""
+"""Lightweight verifier data records."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any
+
+from veritas.verifier.enums import ActionType, CommandClass, UnitOutputStatus
 
 
 @dataclass
-class IterationObservation:
-    """A single iteration produced by the research agent.
-
-    Attributes:
-        iteration: Zero-based index of this iteration within a run.
-        scores: One or more noisy objective measurements of the candidate
-            method (for example, the MLRC-Bench metric evaluated under one or
-            more seeds). ``higher_is_better`` controls orientation. At least one
-            value is required.
-        higher_is_better: If ``True`` (default), larger ``scores`` are better.
-            If ``False``, scores are internally negated so the rest of the
-            pipeline can always assume "higher is better".
-        method_text: Optional natural-language description of the proposed
-            method, used only by the fusion prior.
-        code: Optional code implementation of the method, used only by the
-            fusion prior.
-        rubric_ratings: Optional mapping from rubric dimension name (for
-            example ``"Validity"``) to an integer Likert rating on the 1..5
-            scale produced by ``MLAgentBench/LLM_as_a_Judge.py``. When present,
-            these ratings are converted into a calibrated prior over the
-            improvement contributed by this iteration.
-        metadata: Free-form provenance (task name, model, seed, ...). Not used
-            by the math; carried through for reporting and debugging.
-    """
-
-    iteration: int
-    scores: List[float]
-    higher_is_better: bool = True
-    method_text: Optional[str] = None
-    code: Optional[str] = None
-    rubric_ratings: Optional[Dict[str, float]] = None
-    metadata: Dict[str, object] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if self.scores is None or len(self.scores) == 0:
-            raise ValueError("IterationObservation requires at least one score.")
-        self.scores = [float(s) for s in self.scores]
-
-    def oriented_scores(self) -> List[float]:
-        """Return scores oriented so that larger is always better."""
-        if self.higher_is_better:
-            return list(self.scores)
-        return [-s for s in self.scores]
+class RunRecord:
+    run_id: str
+    selected_card_id: str | None
+    status: str
+    phase: str
+    seed: int | None
+    command_class: CommandClass | str
+    command: str
+    run_artifact_root: str
+    log_dir: str | None = None
+    work_dir: str | None = None
+    idea_evals_path: str | None = None
+    candidate_count: int = 0
+    integrity_enforced: bool = False
+    protected_digest_before_path: str | None = None
+    protected_digest_after_path: str | None = None
+    integrity_flags: list[str] = field(default_factory=list)
+    runtime_seconds: float | None = None
+    failure_notes: str | None = None
 
 
 @dataclass
-class PosteriorSummary:
-    """Compact summary of a Student-t marginal posterior over a quantity.
-
-    The Normal-Inverse-Gamma model yields Student-t marginals. We summarise
-    each marginal by its location, scale, and degrees of freedom so downstream
-    consumers can recompute tail probabilities without holding the full state.
-    """
-
-    mean: float
-    scale: float  # scale parameter of the Student-t (not the variance)
-    dof: float    # degrees of freedom
-
-    def as_dict(self) -> Dict[str, float]:
-        return {"mean": self.mean, "scale": self.scale, "dof": self.dof}
+class CandidateRecord:
+    candidate_id: str
+    logical_candidate_id: str
+    run_id: str
+    card_id: str | None
+    parent_candidate_id: str | None
+    comparison_origin_id: str
+    pool_id: str
+    step: int | None
+    method_name: str
+    phase: str
+    seed: int | None
+    score: float | None
+    score_direction: str
+    score_source: str
+    score_extracted_by: str
+    llm_reported_score: float | None
+    llm_score_trusted: bool
+    snapshot_path: str
+    unit_outputs_status: UnitOutputStatus | str
+    snapshot_source_path: str | None = None
+    unit_outputs_path: str | None = None
+    verifier_only_unit_scores_path: str | None = None
+    metric_recomputed_score: float | None = None
+    score_recompute_abs_error: float | None = None
+    score_recompute_tolerance: float | None = None
+    code_diff_path: str | None = None
+    config_path: str | None = None
+    validity_flags: list[str] = field(default_factory=list)
 
 
 @dataclass
-class VerifierResult:
-    """Verifier output for one iteration.
+class SchedulerAction:
+    type: ActionType | str
+    reason: str
+    candidate_id: str | None = None
+    card_id: str | None = None
+    seed: int | None = None
 
-    Attributes:
-        iteration: Index of the scored iteration.
-        reward: The additional VeriTAS score for this iteration,
-            ``reward = poi * info_gain`` (confidence the gain is real times the
-            magnitude of validated information added). Always non-negative.
-        poi: Posterior probability that the iteration genuinely improved on the
-            incumbent best by more than ``eps_min`` (probability of
-            improvement).
-        info_gain: Validated information gain in nats: the KL divergence
-            between the posterior over the best achievable performance after and
-            before incorporating this iteration.
-        expected_improvement: Posterior expected positive improvement over the
-            incumbent best (Bayesian-optimization acquisition value).
-        accept: Decision flag, ``True`` iff ``poi`` exceeds the acceptance
-            threshold ``tau``.
-        delta_posterior: Summary of the posterior over the improvement
-            ``Delta_t`` for this iteration.
-        incumbent_posterior: Summary of the posterior over the incumbent best
-            performance after this iteration.
-        used_rubric_prior: Whether rubric ratings contributed a fusion prior.
-        metadata: Provenance carried over from the observation.
-    """
 
-    iteration: int
-    reward: float
-    poi: float
-    info_gain: float
-    expected_improvement: float
-    accept: bool
-    delta_posterior: PosteriorSummary
-    incumbent_posterior: PosteriorSummary
-    used_rubric_prior: bool = False
-    metadata: Dict[str, object] = field(default_factory=dict)
+@dataclass
+class CloudRunManifest:
+    run_id: str
+    command: str
+    gcp_project_id: str | None = None
+    zone: str | None = None
+    instance_name: str | None = None
+    machine_type: str | None = None
+    accelerator_type: str | None = None
+    accelerator_count: int | None = None
+    disk_image: str | None = None
+    conda_env: str | None = None
+    python_version: str | None = None
+    cuda_version: str | None = None
+    driver_version: str | None = None
+    git_commit: str | None = None
+    mlrc_commit: str | None = None
+    durable_artifact_uri: str | None = None
+    redacted_environment: dict[str, str] = field(default_factory=dict)
+    notes: dict[str, Any] = field(default_factory=dict)
 
-    def as_dict(self) -> Dict[str, object]:
-        return {
-            "iteration": self.iteration,
-            "reward": self.reward,
-            "poi": self.poi,
-            "info_gain": self.info_gain,
-            "expected_improvement": self.expected_improvement,
-            "accept": self.accept,
-            "delta_posterior": self.delta_posterior.as_dict(),
-            "incumbent_posterior": self.incumbent_posterior.as_dict(),
-            "used_rubric_prior": self.used_rubric_prior,
-            "metadata": dict(self.metadata),
-        }
+
+@dataclass
+class FileDigest:
+    path: str
+    category: str
+    sha256: str
+
+
+@dataclass
+class ProtectedDigestManifest:
+    run_id: str
+    created_at: str
+    digest_algorithm: str
+    protected_sources: list[str]
+    files: list[FileDigest] = field(default_factory=list)
+    missing_files: list[str] = field(default_factory=list)
+
+
+@dataclass
+class BootstrapResult:
+    candidate_order: list[str]
+    delta_hat: dict[str, float]
+    paired_se: dict[str, float]
+    covariance: list[list[float]]
+
+
+@dataclass
+class CandidateEvidence:
+    candidate_id: str
+    logical_candidate_id: str
+    delta_hat: float
+    total_se: float
+
+
+@dataclass
+class EffectiveCandidate:
+    cluster_id: str
+    member_ids: list[str]
+    delta_hat: float
+    total_se: float
+    flags: list[str] = field(default_factory=list)

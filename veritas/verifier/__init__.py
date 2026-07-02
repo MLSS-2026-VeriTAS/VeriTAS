@@ -12,6 +12,7 @@ from .config import NIGPrior, VerifierConfig
 from .fusion import RubricMap, calibrate_rubric_map, reliability_table
 from .types import IterationObservation, PosteriorSummary, VerifierResult
 from .verifier import Verifier
+from .enums import ActionType, CardStatus, CommandClass, DetectorMode, UnitOutputStatus
 
 __all__ = [
     "Verifier",
@@ -23,4 +24,9 @@ __all__ = [
     "IterationObservation",
     "VerifierResult",
     "PosteriorSummary",
+    "ActionType",
+    "CardStatus",
+    "CommandClass",
+    "DetectorMode",
+    "UnitOutputStatus",
 ]

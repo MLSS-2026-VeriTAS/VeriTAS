@@ -1,183 +1,130 @@
-"""Adapters from MLRC-Bench logs to Verifier inputs.
-
-These functions translate the artifacts that MLRC-Bench already produces into
-:class:`IterationObservation` objects, so the Verifier can be attached to a real
-run later with no changes to its core. They are deliberately pure (dict in,
-objects out) so they can be unit-tested on small synthetic payloads without any
-benchmark, GPU, or API access. Thin ``*_from_file`` helpers load JSON from disk.
-
-Reference shapes (see ``MLAgentBench/eval.py`` and
-``MLAgentBench/LLM_as_a_Judge.py`` on the ``copyMLRC`` branch):
-
-* ``EvaluationResult`` carries ``score`` (list of per-step scores), the matching
-  ``score_steps`` (step indices), and a scalar ``final_score``.
-* A results file maps ``trace.json`` path -> serialized ``EvaluationResult``.
-* The LLM judge returns ``{"with_code"|"without_code": {metric: {"Rating": int,
-  ...}}}``.
-"""
+"""Utilities for parsing MLRC-Bench scalar score artifacts."""
 
 from __future__ import annotations
 
-import json
-from typing import Dict, List, Optional
+import re
+from pathlib import Path
+from typing import Any
 
-from .types import IterationObservation
-
-# Rubric dimensions emitted by MLAgentBench/LLM_as_a_Judge.py.
-RUBRIC_DIMENSIONS = (
-    "Clarity",
-    "Validity",
-    "Rigorousness",
-    "Innovativeness",
-    "Generalizability",
-)
+from veritas.verifier.enums import UnitOutputStatus
+from veritas.verifier.io import read_json
+from veritas.verifier.types import CandidateRecord
 
 
-def rubric_ratings_from_judge(
-    judge_output: Dict[str, object], use_code: bool = False
-) -> Optional[Dict[str, float]]:
-    """Extract ``{dimension: rating}`` from an ``llm_evaluate_method`` result.
+class MlrcArtifactError(ValueError):
+    """Raised when an MLRC artifact cannot be parsed into candidate records."""
 
-    Args:
-        judge_output: The dict returned by ``LLM_as_a_Judge.llm_evaluate_method``
-            with ``"with_code"`` and ``"without_code"`` sections.
-        use_code: Select the code-aware ratings when ``True``.
 
-    Returns:
-        A mapping from rubric dimension to integer rating, or ``None`` if no
-        usable ratings are present.
-    """
-    section_key = "with_code" if use_code else "without_code"
-    section = judge_output.get(section_key) if isinstance(judge_output, dict) else None
-    if not isinstance(section, dict):
+def load_idea_evals(path: str | Path) -> list[dict[str, Any]]:
+    data = read_json(path)
+    if isinstance(data, dict) and isinstance(data.get("implementations"), list):
+        implementations = data["implementations"]
+    elif isinstance(data, list):
+        implementations = data
+    else:
+        raise MlrcArtifactError("idea_evals artifact must contain an implementations list")
+
+    records: list[dict[str, Any]] = []
+    for index, item in enumerate(implementations):
+        if not isinstance(item, dict):
+            raise MlrcArtifactError(f"implementation at index {index} is not an object")
+        records.append(item)
+    return records
+
+
+def candidates_from_idea_evals(
+    path: str | Path,
+    *,
+    run_id: str,
+    card_id: str | None,
+    comparison_origin_id: str,
+    pool_id: str,
+    phase: str = "dev",
+    seed: int | None = None,
+    parent_candidate_id: str | None = "baseline",
+    score_direction: str = "maximize",
+    log_dir: str | None = None,
+    score_source: str = "output/idea_evals.json",
+) -> list[CandidateRecord]:
+    implementations = load_idea_evals(path)
+    candidates: list[CandidateRecord] = []
+
+    for index, implementation in enumerate(implementations):
+        score = _extract_score(implementation, index)
+        method_name = str(implementation.get("method_name") or f"candidate_{index:03d}")
+        step = _optional_int(implementation.get("step"))
+        candidate_id = _candidate_id(run_id, method_name, step, index)
+        snapshot_source_path = _snapshot_source_path(log_dir, step)
+
+        candidates.append(
+            CandidateRecord(
+                candidate_id=candidate_id,
+                logical_candidate_id=_slug(method_name),
+                run_id=run_id,
+                card_id=card_id,
+                parent_candidate_id=parent_candidate_id,
+                comparison_origin_id=comparison_origin_id,
+                pool_id=pool_id,
+                step=step,
+                method_name=method_name,
+                phase=phase,
+                seed=seed,
+                score=score,
+                score_direction=score_direction,
+                score_source=score_source,
+                score_extracted_by="runner_wrapper",
+                llm_reported_score=None,
+                llm_score_trusted=False,
+                snapshot_source_path=snapshot_source_path,
+                snapshot_path=_copied_snapshot_path(candidate_id, step),
+                unit_outputs_status=UnitOutputStatus.SINGLE_SCALAR_NO_SE,
+                validity_flags=[UnitOutputStatus.SINGLE_SCALAR_NO_SE.value],
+            )
+        )
+
+    return candidates
+
+
+def _extract_score(implementation: dict[str, Any], index: int) -> float:
+    if "performance" not in implementation:
+        raise MlrcArtifactError(f"implementation at index {index} has no performance field")
+    score = implementation["performance"]
+    if score is None:
+        raise MlrcArtifactError(f"implementation at index {index} has null performance")
+    try:
+        return float(score)
+    except (TypeError, ValueError) as exc:
+        raise MlrcArtifactError(
+            f"implementation at index {index} has non-numeric performance"
+        ) from exc
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
         return None
 
-    ratings: Dict[str, float] = {}
-    for dim, payload in section.items():
-        if isinstance(payload, dict) and "Rating" in payload and payload["Rating"] is not None:
-            try:
-                ratings[dim] = float(payload["Rating"])
-            except (TypeError, ValueError):
-                continue
-    return ratings or None
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", value.strip()).strip("_").lower()
+    return slug or "candidate"
 
 
-def observations_from_evaluation_result(
-    result: Dict[str, object],
-    higher_is_better: bool = True,
-    include_final: bool = True,
-    rubric_by_step: Optional[Dict[int, Dict[str, float]]] = None,
-    metadata: Optional[Dict[str, object]] = None,
-) -> List[IterationObservation]:
-    """Build per-iteration observations from one serialized ``EvaluationResult``.
-
-    Each evaluated step becomes one :class:`IterationObservation` carrying that
-    step's single objective score. When ``score_steps`` is shorter than
-    ``score`` and ``include_final`` is set, the trailing score is treated as the
-    final-answer iteration.
-    """
-    base_meta = dict(metadata or {})
-    scores = list(result.get("score", []) or [])  # type: ignore[arg-type]
-    steps = list(result.get("score_steps", []) or [])  # type: ignore[arg-type]
-
-    observations: List[IterationObservation] = []
-    for idx, step in enumerate(steps):
-        if idx >= len(scores):
-            break
-        step_int = int(step)
-        meta = dict(base_meta)
-        meta["step"] = step_int
-        observations.append(
-            IterationObservation(
-                iteration=idx,
-                scores=[float(scores[idx])],
-                higher_is_better=higher_is_better,
-                rubric_ratings=(rubric_by_step or {}).get(step_int),
-                metadata=meta,
-            )
-        )
-
-    # Trailing final score not covered by score_steps.
-    if include_final and len(scores) > len(steps):
-        meta = dict(base_meta)
-        meta["step"] = "final"
-        observations.append(
-            IterationObservation(
-                iteration=len(observations),
-                scores=[float(scores[-1])],
-                higher_is_better=higher_is_better,
-                metadata=meta,
-            )
-        )
-
-    return observations
+def _candidate_id(run_id: str, method_name: str, step: int | None, index: int) -> str:
+    step_part = f"step_{step}" if step is not None else f"idx_{index}"
+    return f"{_slug(run_id)}_{step_part}_{_slug(method_name)}"
 
 
-def observations_from_results(
-    results: Dict[str, Dict[str, object]],
-    higher_is_better: bool = True,
-) -> Dict[str, List[IterationObservation]]:
-    """Convert a full results mapping (path -> EvaluationResult) into observations."""
-    out: Dict[str, List[IterationObservation]] = {}
-    for path, result in results.items():
-        out[path] = observations_from_evaluation_result(
-            result, higher_is_better=higher_is_better, metadata={"path": path}
-        )
-    return out
+def _snapshot_source_path(log_dir: str | None, step: int | None) -> str | None:
+    if not log_dir or step is None:
+        return None
+    return str(Path(log_dir) / "env_log" / "traces" / f"step_{step}_files")
 
 
-def merge_seed_observations(
-    runs: List[List[IterationObservation]],
-    higher_is_better: bool = True,
-) -> List[IterationObservation]:
-    """Combine matched iterations across repeated seeds into multi-score steps.
+def _copied_snapshot_path(candidate_id: str, step: int | None) -> str:
+    suffix = f"step_{step}_files" if step is not None else "snapshot"
+    return str(Path("snapshots") / f"{candidate_id}_{suffix}")
 
-    Given several runs that share the same iteration structure (for example the
-    same task evaluated under different seeds), produce one observation per
-    iteration whose ``scores`` gathers every seed's measurement. This lets the
-    Verifier infer the noise variance directly from seed spread.
-    """
-    if not runs:
-        return []
-    reference = runs[0]
-
-    def obs_key(obs: IterationObservation):
-        has_step = "step" in obs.metadata
-        step_value = obs.metadata.get("step") if has_step else None
-        return obs.iteration, has_step, step_value
-
-    expected_keys = [obs_key(obs) for obs in reference]
-    for idx, run in enumerate(runs[1:], start=1):
-        run_keys = [obs_key(obs) for obs in run]
-        if run_keys != expected_keys:
-            raise ValueError(
-                "merge_seed_observations requires all runs to have matching "
-                "iteration/step structure; run 0 and run "
-                f"{idx} differ."
-            )
-
-    merged: List[IterationObservation] = []
-    for i in range(len(reference)):
-        scores: List[float] = []
-        for run in runs:
-            scores.extend(run[i].scores)
-        meta = dict(reference[i].metadata)
-        meta["seeds"] = len(runs)
-        merged.append(
-            IterationObservation(
-                iteration=reference[i].iteration,
-                scores=scores,
-                higher_is_better=higher_is_better,
-                metadata=meta,
-            )
-        )
-    return merged
-
-
-def observations_from_results_file(
-    path: str, higher_is_better: bool = True
-) -> Dict[str, List[IterationObservation]]:
-    """Load a results JSON file and convert it to observations."""
-    with open(path, "r", encoding="utf-8") as fh:
-        results = json.load(fh)
-    return observations_from_results(results, higher_is_better=higher_is_better)
