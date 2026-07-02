@@ -79,9 +79,17 @@ def recompute_mean_score(rows: list[dict[str, Any]]) -> float:
     total_weight = 0.0
     for row in rows:
         weight = row.get("weight", 1.0)
-        weight = 1.0 if weight is None else float(weight)
-        weighted_sum += score_component(row) * weight
-        total_weight += weight
+        if weight is None:
+            weight_value = 1.0
+        else:
+            try:
+                weight_value = float(weight)
+            except (TypeError, ValueError) as exc:
+                raise UnitOutputError(
+                    f"invalid weight for unit_id={row.get('unit_id')}: {weight!r}"
+                ) from exc
+        weighted_sum += score_component(row) * weight_value
+        total_weight += weight_value
 
     if total_weight <= 0:
         raise UnitOutputError("total unit weight must be positive")
