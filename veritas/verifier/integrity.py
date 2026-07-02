@@ -153,6 +153,10 @@ def compare_digest_manifests(
         if after_digest is None or after_digest.sha256 != before_digest.sha256:
             flags.add(_flag_for_category(before_digest.category))
 
+    for path, after_digest in after_by_path.items():
+        if path not in before_by_path:
+            flags.add(_flag_for_category(after_digest.category))
+
     for missing_path in after.missing_files:
         before_digest = before_by_path.get(missing_path)
         if before_digest is None:
