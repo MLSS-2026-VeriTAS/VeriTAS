@@ -58,7 +58,12 @@ def align_unit_outputs(
 def score_component(row: dict[str, Any]) -> float:
     component = row.get("score_component")
     if component is not None:
-        return float(component)
+        try:
+            return float(component)
+        except (TypeError, ValueError) as exc:
+            raise UnitOutputError(
+                f"invalid score_component for unit_id={row.get('unit_id')}: {component!r}"
+            ) from exc
 
     if "prediction" in row and "target_or_verifier_label" in row:
         return 1.0 if row["prediction"] == row["target_or_verifier_label"] else 0.0
