@@ -260,7 +260,7 @@ def _check_recomputed_scores(
         _, _, status = recompute_score_check(
             rows,
             candidate.score,
-            candidate.score_recompute_tolerance or 1e-9,
+            candidate.score_recompute_tolerance if candidate.score_recompute_tolerance is not None else 1e-9,
         )
         if status != UnitOutputStatus.PER_UNIT_BOOTSTRAP_OK:
             raise ValueError(f"score recompute mismatch for {candidate.candidate_id}")
