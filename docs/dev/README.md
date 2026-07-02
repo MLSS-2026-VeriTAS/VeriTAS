@@ -12,3 +12,5 @@ The `docs/dev/` folder contains notes for developers.
 Below are a list of developer notes.
 
 [Google Cloud VM Instructions](GOOGLE_CLOUD.md)
+
+[MLRC Trial Runbook](MLRC_TRIALS.md)

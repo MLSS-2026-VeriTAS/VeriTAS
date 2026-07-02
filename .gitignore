@@ -1,3 +1,6 @@
+# VeriTAS Verifier validation artifacts
+verifier_validation_out/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -208,6 +211,9 @@ tempCodeRunnerFile.py
 
 # PyPI configuration file
 .pypirc
+
+# External benchmark checkouts
+MLRC-Bench/
 
 # Marimo
 marimo/_static/

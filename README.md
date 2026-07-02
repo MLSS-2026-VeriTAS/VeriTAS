@@ -15,7 +15,13 @@ VeriTAS extends [MLRC-Bench](https://github.com/yunx-z/MLRC-Bench) to add better
 
 In addition to the existing MLRC-Bench scorers, VeriTAS introduces a **Verifier**. The Verifier uses Bayesian statistics to estimate the additional information contributed by the most recent agent iteration and uses that estimate as an additional score.
 
-> TODO: Replace the description above with a precise definition of “additional information,” including the Bayesian model, prior, posterior quantity, and decision rule used by the Verifier.
+Concretely, the Verifier models each iteration's noisy objective scores with a conjugate Normal-Inverse-Gamma posterior over the method's latent performance, forms the posterior over the improvement `Delta_t` versus the incumbent, and emits:
+
+- a **probability of improvement** `POI_t = P(Delta_t > eps_t)` (the decision rule: accept iff `POI_t > tau`), where the minimal effect size `eps_t` scales with the inferred measurement noise;
+- a **validated information gain** `IG_t = max(Delta_mu, 0)^2 / (2 Delta_sigma^2)` (one-sided evidence for genuine improvement on the incumbent);
+- an additional score (reward) `r_t = POI_t * IG_t`.
+
+It can also fuse the MLRC-Bench `LLM_as_a_Judge` rubric ratings into a calibrated prior over the improvement. The full probabilistic model, priors, posterior quantities, and decision rule are specified in [`docs/verifier_method.md`](docs/verifier_method.md). The implementation lives in [`veritas/verifier/`](veritas/verifier/).
 
 ## Validation strategy
 
@@ -28,13 +34,17 @@ The Verifier will be evaluated through a paired ablation study:
 
 For each paired run, the net improvement is:
 
-> TODO: How this score is derived has not been actually determined.
-
 ```text
 net improvement = score_with_verifier - score_without_verifier
 ```
 
 Results should be reported per task and in aggregate across repeated seeds. A positive paired difference indicates that adding the Verifier improved benchmark performance under the controlled configuration.
+
+While full MLRC-Bench runs require GPUs and model credentials, the Verifier can be validated end-to-end on a synthetic agent trajectory with *known* ground truth (no GPU/API needed). [`scripts/validate_verifier.py`](scripts/validate_verifier.py) runs the same paired ablation against a greedy baseline and reports net improvement, regret versus an oracle, false-acceptance rate, and calibration. See [`docs/verifier_method.md`](docs/verifier_method.md) (section 8) for the metric definitions.
+
+```bash
+python scripts/validate_verifier.py --seeds 0 1 2 3 4 --compare-verifier
+```
 
 ## Project status
 
@@ -180,26 +190,25 @@ python -m pytest tests/test_verifier.py
 
 ## Running the validation test
 
-The validation runner should execute matched runs with and without the Verifier, then report the paired score differences. The planned interface is:
+The validation runner executes matched (paired) runs with and without the Verifier and reports the paired score differences. It runs on a synthetic agent trajectory with known ground truth, so it needs **no GPU, API key, or MLRC-Bench task setup**:
 
 ```bash
 python scripts/validate_verifier.py \
-  --task <task-name> \
-  --model <model-name> \
-  --gpu-id <gpu-id> \
   --seeds 0 1 2 3 4 \
   --compare-verifier
 ```
 
-> TODO: Implement the validation runner and update this command if its final interface differs.
+The `--task`, `--model`, and `--gpu-id` flags are accepted for interface compatibility with the MLRC-Bench launch scripts but are ignored in synthetic mode. Useful extra flags: `--iterations N`, `--n-seeds K` (measurements per candidate), `--use-rubric` (feed correlated rubric ratings through the fusion prior), `--out-dir DIR`, and `--no-plots`.
 
-At minimum, validation output should include:
+The output includes, per seed and in aggregate (mean +/- std):
 
-- The task, LLM, seed, and run configuration.
-- MLRC-Bench scores with and without the Verifier.
-- The paired net improvement for every run.
-- Aggregate mean improvement and uncertainty across seeds.
-- Runtime and model/API cost, so gains can be interpreted alongside overhead.
+- The seed and run configuration.
+- Final true performance with and without the Verifier, and the paired net improvement.
+- Regret versus an oracle (final and integrated over the run).
+- False-acceptance rate for each policy.
+- Saved plots: deployed-performance trajectory, a reliability diagram for the Verifier's probability of improvement, and per-seed net improvement.
+
+To attach the Verifier to a real MLRC-Bench run, convert its `trace.json` / results logs into Verifier inputs with [`veritas/verifier/mlrc_adapter.py`](veritas/verifier/mlrc_adapter.py); the metric definitions are in [`docs/verifier_method.md`](docs/verifier_method.md) (section 8).
 
 ## Contributing
 

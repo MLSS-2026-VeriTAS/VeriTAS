@@ -1,26 +1,153 @@
-# RUNNING VM ON GOOGLE CLOUD
+# Google Cloud Runbook
 
-0. To run the Google Cloud VM, first you will need to be invited to the Google Cloud project. The owner will need to edit IAM Permissions to give you necessary permissions.
+This project uses Google Cloud for hackathon compute, including dev/test runs
+and final results. Treat cloud execution as part of the experiment protocol:
+record the environment, preserve artifacts, and avoid leaking secrets.
 
-1. Install gcloud on your local machine. See [installation instructions](https://docs.cloud.google.com/sdk/docs/install-sdk).
+## Access
 
-2. In terminal run `gcloud compute ssh --zone "us-central1-b" "instance-20260622-053006" --project "veritas-500122"`
+1. Ask the project owner for access to the Google Cloud project.
+2. Use the smallest IAM role that lets you run the assigned VM or job.
+3. Do not commit service account keys, API keys, Kaggle credentials, or hidden
+   audit labels.
+4. Prefer project-managed identities over downloaded service account keys when
+   possible.
 
-3. Install conda. See [installation instructions](https://www.anaconda.com/docs/getting-started/miniconda/install/linux-install).
+## Connect To The VM
 
+Install `gcloud` locally, then connect:
 
-———
+```bash
+gcloud compute ssh \
+  --zone "us-central1-b" \
+  "instance-20260622-053006" \
+  --project "veritas-500122"
+```
 
+Use `tmux` for long runs:
+
+```bash
 tmux a -t 0
+```
 
+## Environment Setup
+
+Clone or copy VeriTAS onto the VM. If the repository is private and `git clone`
+fails from the VM, transfer a branch tarball from a machine that already has
+access:
+
+```bash
+# local machine
+git archive --format=tar.gz --prefix=VeriTAS/ origin/Walter -o VeriTAS-Walter.tar.gz
+gcloud compute scp VeriTAS-Walter.tar.gz USER@instance-20260622-053006:~/work/ \
+  --zone us-central1-b --project veritas-500122
+
+# VM
+mkdir -p ~/work && cd ~/work
+tar xzf VeriTAS-Walter.tar.gz
+```
+
+Apply the MLRC GPT patch once after cloning MLRC-Bench:
+
+```bash
+cd ~/work/VeriTAS
+bash scripts/apply_mlrc_patch.sh ../MLRC-Bench
+```
+
+For GPT-5.x runs, export the public OpenAI API key on the VM:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+export OPENAI_REASONING_EFFORT=low
+unset MY_AZURE_OPENAI_ENDPOINT
+```
+
+Activate the task environment and set run variables:
+
+```bash
 conda activate product-recommendation
 
 export GCP_PROJECT_ID="veritas-500122"
-export TASK_NAME=product-recommendation
-export MODEL=gemini-1.5-flash-002
-export GPU_ID=0
+export TASK_NAME="product-recommendation"
+export MODEL="gemini-1.5-flash-002"
+export GPU_ID="0"
+```
 
+Initialize and launch MLRC-Bench:
 
- bash scripts/init_env.sh ${TASK_NAME} ${MODEL} ${GPU_ID} "TEST_MODEL"
+```bash
+bash scripts/init_env.sh "${TASK_NAME}" "${MODEL}" "${GPU_ID}" "TEST_MODEL"
+bash launch.sh "${TASK_NAME}" "${MODEL}" "${GPU_ID}"
+```
 
-bash launch.sh ${TASK_NAME} ${MODEL} ${GPU_ID}
+## Required Cloud Run Metadata
+
+Every verifier run should write a `cloud_run_manifest.json` beside the run
+ledger. It should include:
+
+- `gcp_project_id`
+- zone
+- instance name
+- machine type
+- accelerator type/count
+- disk image or VM image identifier
+- conda environment
+- Python version
+- CUDA and driver versions when available
+- VeriTAS git commit
+- MLRC-Bench git commit
+- exact command
+- durable artifact URI
+- redacted environment variables
+
+The helper `veritas.verifier.cloud.build_cloud_run_manifest` creates the
+in-process portion of this manifest without requiring Google Cloud SDK imports.
+
+## Artifact Durability
+
+Do not leave final evidence only on the VM disk or in `tmux` scrollback.
+
+After each run, copy these artifacts to durable storage, preferably a GCS bucket:
+
+- `runs.jsonl`
+- `candidates.jsonl`
+- `verifier_report.json`
+- `scheduler_state.json`
+- `cloud_run_manifest.json`
+- protected digest manifests
+- unit outputs
+- candidate snapshots
+- MLRC `env_log`
+- final report
+
+Record the durable URI in the run manifest.
+
+## Cost Controls
+
+Before expensive runs:
+
+- agree on max dev runs, max reruns, max audit looks, and max wall-clock time;
+- configure budget alerts for the project or billing account;
+- stop idle VMs;
+- record runtime and model/API cost when available.
+
+Budget alerts are notifications, not a hard spending cap. Do not rely on alerts
+alone to stop runaway jobs.
+
+## Reproducibility Rules
+
+- Use a fresh run workdir for each experiment.
+- Hash protected files before and after each candidate run.
+- Record the exact command and seed.
+- Record package state, at minimum with a `pip freeze` artifact.
+- Do not reuse partial artifacts from interrupted runs.
+- Mark interrupted or failed commands as failed ledger rows.
+
+## Audit/Test Secrecy
+
+Final/audit labels and verifier-only unit scores must not be visible to the LLM
+coding agent before a candidate is frozen for audit.
+
+If a cloud workdir contains hidden labels or verifier-only scores, restrict read
+access and avoid copying those files into agent-visible prompts, logs, or
+workspace paths.
